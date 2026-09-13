@@ -185,6 +185,27 @@ export default function WordsPage() {
     setSelectedIds(new Set());
   }
 
+  async function handleBulkDelete() {
+    if (selectedIds.size === 0) return;
+    const confirmed = confirm(`${selectedIds.size} kelimeyi kalıcı olarak silmek istediğine emin misin? Bu işlem geri alınamaz.`);
+    if (!confirmed) return;
+
+    setBulkBusy(true);
+    const ids = Array.from(selectedIds);
+    const { error } = await supabase.from("flashcards").delete().in("id", ids);
+
+    if (error) {
+      alert("Silinemedi: " + error.message);
+      setBulkBusy(false);
+      return;
+    }
+
+    const idSet = new Set(ids);
+    setWords((prev) => prev.filter((w) => !idSet.has(w.id)));
+    setBulkBusy(false);
+    setSelectedIds(new Set());
+  }
+
   // ============================================================
   // Satır içi düzenleme
   // ============================================================
@@ -331,6 +352,14 @@ export default function WordsPage() {
                 className="text-xs font-medium px-4 py-1.5 rounded-lg bg-indigo-600 text-white hover:bg-indigo-700 disabled:opacity-50 transition-colors"
               >
                 {bulkBusy ? "Uygulanıyor..." : "Uygula"}
+              </button>
+
+              <button
+                onClick={handleBulkDelete}
+                disabled={selectedIds.size === 0 || bulkBusy}
+                className="text-xs font-medium px-4 py-1.5 rounded-lg bg-red-100 dark:bg-red-950 text-red-700 dark:text-red-300 hover:bg-red-200 dark:hover:bg-red-900 disabled:opacity-50 transition-colors"
+              >
+                🗑️ Seçilenleri Sil
               </button>
             </div>
           </div>
