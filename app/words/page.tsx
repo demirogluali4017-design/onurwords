@@ -1,8 +1,9 @@
 "use client";
-
+ 
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { supabase } from "@/lib/supabase";
+import { fetchAllRows } from "@/lib/fetchAll";
 import { Flashcard, WordGroup } from "@/types";
 import {
   deriveLearningStage,
@@ -10,58 +11,61 @@ import {
   LEARNING_STAGE_LABELS,
   CARD_STATUS_LABELS,
 } from "@/lib/studyEngine";
-
+ 
 type FilterTab = "all" | "weak" | "long_term" | "new" | "grouped" | "ungrouped";
-
+ 
 interface EditDraft {
   word: string;
   preposition: string;
   meaning: string;
   example_sentence: string;
 }
-
+ 
 export default function WordsPage() {
   const [words, setWords] = useState<Flashcard[]>([]);
   const [groups, setGroups] = useState<WordGroup[]>([]);
   const [loading, setLoading] = useState(true);
+  const [autoGrouping, setAutoGrouping] = useState(false);
   const [search, setSearch] = useState("");
   const [filter, setFilter] = useState<FilterTab>("all");
-
+ 
   // Çoklu seçim / toplu gruplama
   const [selectionMode, setSelectionMode] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [bulkGroupValue, setBulkGroupValue] = useState("__pick__");
   const [bulkBusy, setBulkBusy] = useState(false);
-
+ 
   // Satır içi düzenleme
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editDraft, setEditDraft] = useState<EditDraft | null>(null);
   const [savingEdit, setSavingEdit] = useState(false);
-
+ 
   async function fetchAll() {
     setLoading(true);
-    const [{ data: wordData }, { data: groupData }] = await Promise.all([
-      supabase.from("flashcards").select("*").order("created_at", { ascending: false }),
+    const [wordData, { data: groupData }] = await Promise.all([
+      fetchAllRows<Flashcard>((from, to) =>
+        supabase.from("flashcards").select("*").order("created_at", { ascending: false }).range(from, to)
+      ),
       supabase.from("word_groups").select("*").order("name", { ascending: true }),
     ]);
-    if (wordData) setWords(wordData as Flashcard[]);
+    setWords(wordData);
     if (groupData) setGroups(groupData as WordGroup[]);
     setLoading(false);
   }
-
+ 
   useEffect(() => {
     fetchAll();
   }, []);
-
+ 
   const groupNameById = useMemo(() => {
     const map = new Map<string, string>();
     groups.forEach((g) => map.set(g.id, g.name));
     return map;
   }, [groups]);
-
+ 
   const filteredWords = useMemo(() => {
     let list = words;
-
+ 
     if (filter === "weak") {
       list = list.filter((w) => w.is_weak);
     } else if (filter === "long_term") {
@@ -73,7 +77,7 @@ export default function WordsPage() {
     } else if (filter === "ungrouped") {
       list = list.filter((w) => !w.group_id);
     }
-
+ 
     const q = search.trim().toLowerCase();
     if (!q) return list;
     return list.filter(
@@ -83,10 +87,10 @@ export default function WordsPage() {
         (w.preposition ?? "").toLowerCase().includes(q)
     );
   }, [words, search, filter]);
-
+ 
   const weakCount = useMemo(() => words.filter((w) => w.is_weak).length, [words]);
   const groupedCount = useMemo(() => words.filter((w) => w.group_id).length, [words]);
-
+ 
   // ============================================================
   // Silme
   // ============================================================
@@ -97,7 +101,7 @@ export default function WordsPage() {
       setWords((prev) => prev.filter((w) => w.id !== id));
     }
   }
-
+ 
   // ============================================================
   // Tekli grup atama (satır bazlı select)
   // ============================================================
@@ -115,7 +119,7 @@ export default function WordsPage() {
     }
     await updateWordGroup([word.id], value);
   }
-
+ 
   async function createGroup(name: string): Promise<WordGroup | null> {
     const { data: newGroup, error } = await supabase
       .from("word_groups")
@@ -129,7 +133,7 @@ export default function WordsPage() {
     setGroups((prev) => [...prev, newGroup as WordGroup]);
     return newGroup as WordGroup;
   }
-
+ 
   async function updateWordGroup(wordIds: string[], groupId: string | null) {
     const { error } = await supabase.from("flashcards").update({ group_id: groupId }).in("id", wordIds);
     if (!error) {
@@ -139,7 +143,44 @@ export default function WordsPage() {
       alert("Grup ataması güncellenemedi: " + error.message);
     }
   }
-
+ 
+  // ============================================================
+  // Otomatik gruplama (AI)
+  // ============================================================
+  async function handleAutoGroup() {
+    const ungroupedCount = words.length - groupedCount;
+    if (ungroupedCount < 2) {
+      alert("Gruplanacak yeterli grupsuz kelime yok.");
+      return;
+    }
+ 
+    const estimatedBatches = Math.ceil(ungroupedCount / 150);
+    const confirmed = confirm(
+      `${ungroupedCount} grupsuz kelime Gemini ile analiz edilecek (yaklaşık ${estimatedBatches} istek, günlük kotanı etkiler). Devam edilsin mi?`
+    );
+    if (!confirmed) return;
+ 
+    setAutoGrouping(true);
+    try {
+      const res = await fetch("/api/auto-group", { method: "POST" });
+      const data = await res.json();
+ 
+      if (!res.ok) {
+        throw new Error(data.error || "Bilinmeyen hata");
+      }
+ 
+      await fetchAll();
+      alert(
+        `✅ ${data.groupsCreated} yeni grup oluşturuldu, ${data.wordsGrouped} kelime gruplandı.` +
+          (data.errors ? `\n\n⚠️ Bazı batch'lerde hata oluştu: ${data.errors.join(", ")}` : "")
+      );
+    } catch (err) {
+      alert("Otomatik gruplama başarısız: " + (err instanceof Error ? err.message : "Bilinmeyen hata"));
+    } finally {
+      setAutoGrouping(false);
+    }
+  }
+ 
   // ============================================================
   // Çoklu seçim / toplu gruplama
   // ============================================================
@@ -147,7 +188,7 @@ export default function WordsPage() {
     setSelectionMode((v) => !v);
     setSelectedIds(new Set());
   }
-
+ 
   function toggleSelected(id: string) {
     setSelectedIds((prev) => {
       const next = new Set(prev);
@@ -156,16 +197,16 @@ export default function WordsPage() {
       return next;
     });
   }
-
+ 
   function selectAllFiltered() {
     setSelectedIds(new Set(filteredWords.map((w) => w.id)));
   }
-
+ 
   async function handleBulkGroup() {
     if (selectedIds.size === 0) return;
     setBulkBusy(true);
     const ids = Array.from(selectedIds);
-
+ 
     if (bulkGroupValue === "__new__") {
       const name = prompt(`${ids.length} kelime için yeni grup adı:`);
       if (!name || !name.trim()) {
@@ -179,33 +220,33 @@ export default function WordsPage() {
     } else if (bulkGroupValue !== "__pick__") {
       await updateWordGroup(ids, bulkGroupValue);
     }
-
+ 
     setBulkBusy(false);
     setBulkGroupValue("__pick__");
     setSelectedIds(new Set());
   }
-
+ 
   async function handleBulkDelete() {
     if (selectedIds.size === 0) return;
     const confirmed = confirm(`${selectedIds.size} kelimeyi kalıcı olarak silmek istediğine emin misin? Bu işlem geri alınamaz.`);
     if (!confirmed) return;
-
+ 
     setBulkBusy(true);
     const ids = Array.from(selectedIds);
     const { error } = await supabase.from("flashcards").delete().in("id", ids);
-
+ 
     if (error) {
       alert("Silinemedi: " + error.message);
       setBulkBusy(false);
       return;
     }
-
+ 
     const idSet = new Set(ids);
     setWords((prev) => prev.filter((w) => !idSet.has(w.id)));
     setBulkBusy(false);
     setSelectedIds(new Set());
   }
-
+ 
   // ============================================================
   // Satır içi düzenleme
   // ============================================================
@@ -218,19 +259,19 @@ export default function WordsPage() {
       example_sentence: w.example_sentence ?? "",
     });
   }
-
+ 
   function cancelEdit() {
     setEditingId(null);
     setEditDraft(null);
   }
-
+ 
   async function saveEdit(id: string) {
     if (!editDraft) return;
     if (!editDraft.word.trim() || !editDraft.meaning.trim()) {
       alert("Kelime ve anlam boş olamaz.");
       return;
     }
-
+ 
     setSavingEdit(true);
     const { error } = await supabase
       .from("flashcards")
@@ -241,13 +282,13 @@ export default function WordsPage() {
         example_sentence: editDraft.example_sentence.trim(),
       })
       .eq("id", id);
-
+ 
     if (error) {
       alert("Kaydedilemedi: " + error.message);
       setSavingEdit(false);
       return;
     }
-
+ 
     setWords((prev) =>
       prev.map((w) =>
         w.id === id
@@ -265,7 +306,7 @@ export default function WordsPage() {
     setEditingId(null);
     setEditDraft(null);
   }
-
+ 
   return (
     <main className="min-h-screen bg-slate-50 dark:bg-slate-950 px-6 py-12">
       <div className="max-w-6xl mx-auto space-y-6">
@@ -275,7 +316,7 @@ export default function WordsPage() {
             ← Ana sayfaya dön
           </Link>
         </div>
-
+ 
         <div className="flex flex-wrap items-center gap-2">
           <FilterButton active={filter === "all"} onClick={() => setFilter("all")}>
             Tümü ({words.length})
@@ -295,8 +336,15 @@ export default function WordsPage() {
           <FilterButton active={filter === "ungrouped"} onClick={() => setFilter("ungrouped")}>
             Grupsuz ({words.length - groupedCount})
           </FilterButton>
-
-          <div className="ml-auto">
+ 
+          <div className="ml-auto flex items-center gap-2">
+            <button
+              onClick={handleAutoGroup}
+              disabled={autoGrouping}
+              className="text-xs font-medium px-3 py-1.5 rounded-full border bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-300 border-slate-200 dark:border-slate-700 hover:border-indigo-300 disabled:opacity-50 transition-colors"
+            >
+              {autoGrouping ? "🤖 Gruplanıyor..." : "🤖 Otomatik Grupla (AI)"}
+            </button>
             <button
               onClick={toggleSelectionMode}
               className={`text-xs font-medium px-3 py-1.5 rounded-full border transition-colors ${
@@ -309,7 +357,7 @@ export default function WordsPage() {
             </button>
           </div>
         </div>
-
+ 
         <input
           type="text"
           placeholder="Kelime, anlam veya preposition ara..."
@@ -317,7 +365,7 @@ export default function WordsPage() {
           onChange={(e) => setSearch(e.target.value)}
           className="w-full rounded-xl border border-slate-200 dark:border-slate-700 px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400"
         />
-
+ 
         {selectionMode && (
           <div className="rounded-xl bg-indigo-50 dark:bg-indigo-950 border border-indigo-200 dark:border-indigo-800 p-4 flex flex-wrap items-center gap-3">
             <span className="text-sm font-medium text-indigo-700 dark:text-indigo-300">
@@ -329,7 +377,7 @@ export default function WordsPage() {
             <button onClick={() => setSelectedIds(new Set())} className="text-xs text-indigo-600 hover:underline">
               Seçimi temizle
             </button>
-
+ 
             <div className="flex items-center gap-2 ml-auto">
               <select
                 value={bulkGroupValue}
@@ -353,7 +401,7 @@ export default function WordsPage() {
               >
                 {bulkBusy ? "Uygulanıyor..." : "Uygula"}
               </button>
-
+ 
               <button
                 onClick={handleBulkDelete}
                 disabled={selectedIds.size === 0 || bulkBusy}
@@ -364,7 +412,7 @@ export default function WordsPage() {
             </div>
           </div>
         )}
-
+ 
         <div className="overflow-x-auto rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800">
           <table className="w-full text-sm">
             <thead className="bg-slate-100 dark:bg-slate-700 text-slate-500 dark:text-slate-400 text-left">
@@ -398,7 +446,7 @@ export default function WordsPage() {
                   const stage = deriveLearningStage(w);
                   const status = deriveCardStatus(w);
                   const isEditing = editingId === w.id;
-
+ 
                   return (
                     <tr key={w.id} className={selectedIds.has(w.id) ? "bg-indigo-50/50 dark:bg-indigo-950/30" : ""}>
                       {selectionMode && (
@@ -411,7 +459,7 @@ export default function WordsPage() {
                           />
                         </td>
                       )}
-
+ 
                       {isEditing && editDraft ? (
                         <>
                           <td className="px-4 py-2">
@@ -529,7 +577,7 @@ export default function WordsPage() {
             </tbody>
           </table>
         </div>
-
+ 
         <p className="text-xs text-slate-400 dark:text-slate-500">
           Toplam {filteredWords.length} kelime gösteriliyor. &apos;Çoklu Seç&apos; ile birden fazla
           kelimeyi tek seferde gruplayabilirsin. Bir kelimeyi düzenlemek için &apos;Düzenle&apos;ye
@@ -539,7 +587,7 @@ export default function WordsPage() {
     </main>
   );
 }
-
+ 
 function EditInput({ value, onChange }: { value: string; onChange: (v: string) => void }) {
   return (
     <input
@@ -550,7 +598,7 @@ function EditInput({ value, onChange }: { value: string; onChange: (v: string) =
     />
   );
 }
-
+ 
 function FilterButton({
   active,
   onClick,
