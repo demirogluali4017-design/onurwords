@@ -3,20 +3,13 @@
 import { useEffect, useState } from "react";
 
 const LINES = [
-  "Bir dil, her gün bir cümleyle büyür.",
-  "Bugün bilmediğin kelime, yarının cümlesidir.",
-  "İngilizce, tekrar edilince yabancı kalmaz.",
-  "Azim, aynı kelimeye ikinci kez bakmaktır.",
-  "İstikrar, beş dakikalık turu her gün yapmaktır.",
-  "Kararlılık, zor kelimeyi atlamamaktır.",
-  "Unutmak normaldir. Dönmek öğrenmektir.",
-  "Küçük tekrar, uzun hafızayı kurar.",
-  "Bugünkü on kelime, yarının rahatlığıdır.",
-  "Öğrenmek acele etmez. Bırakmayan ilerler.",
-  "Her doğru cevap, bir kapıyı aralar.",
-  "Dil, vazgeçmeyen insanın yanına oturur.",
   "Bugün bilmediğin kelime yarın götünü tırmalar",
   "We are the same pencil",
+  "Her yeni kelime, zihninde kilitli kalmış yeni bir kapının anahtarıdır.",
+  "Kelime hazinesi genişledikçe sadece bir dili değil, dünyayı ve insanları anlama kapasiten de büyür.",
+  "Anlamını öğrendiğin her sözcük, kendini ifade ederken özgürlüğüne katılan yeni bir güçtür.",
+  "Mükemmel ezberlemek zorunda değilsin; bugün karşılaştığın tek bir kelime bile yarınki iletişimini kolaylaştıracak.",
+  "Dilde ilerleme, büyük adımlarla değil, sabırla biriktirilen küçük kelime parçalarıyla inşa edilir.",
 ];
 
 export default function MotiveLine() {
