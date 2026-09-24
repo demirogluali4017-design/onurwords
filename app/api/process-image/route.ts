@@ -12,7 +12,7 @@ const EXTRACTION_PROMPT = `Bu görsel(ler)deki İngilizce kelimeleri çıkar. Bi
 2. "meaning" alanı: Eğer görselde kelimenin Türkçe anlamı zaten YAZILI olarak veriliyorsa (defter/kitap sayfasında karşısında yazan Türkçe kelime/ifade), onu BİREBİR, HİÇBİR ŞEKİLDE DEĞİŞTİRMEDEN, PARAFRAZ YAPMADAN, EŞ ANLAMLISINI KULLANMADAN aynen yaz — kendi yorumunu veya alternatif çevirini KATMA. Görselde yazılı bir anlam YOKSA (sadece kelimenin kendisi varsa) o zaman doğru ve yaygın Türkçe anlamını sen üret.
 3. "example_sentence" alanı: SADECE ve KESİNLİKLE İngilizce bir örnek cümle yaz. Türkçe veya başka bir dilde örnek cümle YAZMA. Görselde kelimeyle birlikte bir örnek cümle varsa onu birebir kullan; yoksa kelimeye uygun basit, doğru dilbilgisiyle yazılmış yeni bir İngilizce cümle üret.
 4. Aynı kelime birden fazla görselde tekrar geçiyorsa SADECE BİR KEZ ekle (tekrar eden kaydı çıkarma).
-5. "hint_word": İngilizce kelimeyi akılda tutan kısa bir Türkçe kelime ya da öbek. Yazılışı veya sesi İngilizce kelimeye benzesin VE gerçek Türkçe anlamını da taşısın. Yalnızca harf benzerliği yetmez. Örnek: futile (faydasız) için "faydasız" yaz, "fay" yazma. Anlam bu iki şartı sağlıyorsa onu kullan. Uzun cümle yazma.
+5. "hint_word": Düz çeviri yazma. Kelimeyi hafızada tutan tek bir Türkçe çağrışım cümlesi yaz. Cümlede hem kelimenin sesine benzeyen tanıdık bir Türkçe söz olsun hem de gerçek anlamı geçsin. Örnek: "par intérim" (arasıra) için "Fatih Terim arasıra gelir gider". En fazla 12 kelime.
 6. "synonyms": Bu İngilizce kelimenin 3 yaygın eş anlamlısı. Dizi olarak yaz. Kelimenin kendisini tekrarlama.
 Yanıtı sadece ve strictly JSON array formatında döndür, başka hiçbir açıklama ekleme.
 Format:

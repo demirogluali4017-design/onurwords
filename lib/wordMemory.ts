@@ -6,11 +6,13 @@ export interface WordMemory {
 const EMPTY: WordMemory = { hint_word: null, synonyms: null };
 const MODELS = ["gemini-3.5-flash-lite", "gemini-3.8-flash"];
 
-const HINT_RULE = `hint_word: İngilizce kelimeyi akılda tutan kısa bir Türkçe kelime ya da öbek. İki şart birden gerekir:
-1) Yazılışı veya sesi İngilizce kelimeye benzesin.
-2) Kelimenin gerçek Türkçe anlamını da taşısın. Yalnızca harf benzerliği yetmez.
-Örnek: futile (anlamı faydasız) için ipucu "faydasız" olsun. "fay" yazma; o sadece yazılış benzer, anlamı taşımaz.
-Anlamın kendisi bu iki şartı sağlıyorsa onu yaz. Uzun cümle yazma.`;
+const HINT_RULE = `hint_word: Kelimeyi hafızada tutan kısa bir Türkçe çağrışım cümlesi. Düz çeviri yazma.
+Cümlede iki şey birden olsun:
+1) İngilizce kelimenin sesine veya yazılışına benzeyen tanıdık bir Türkçe kelime, isim ya da öbek.
+2) Kelimenin gerçek anlamı, aynı cümlenin içinde.
+Örnek: "par intérim" arasıra demektir. İpucu "Fatih Terim arasıra gelir gider" olsun. "Fatih Terim" sese benzer, "arasıra" gerçek anlamdır.
+"futile" faydasız demektir. İpucu "Faydasız işe futile diye üzülme" gibi anlamı da taşıyan bir cümle olsun. Sadece "fay" yazma.
+Tek cümle yaz, en fazla 12 kelime.`;
 
 export function normalizeHint(value: unknown): string | null {
   const hint = String(value ?? "")
@@ -18,7 +20,7 @@ export function normalizeHint(value: unknown): string | null {
     .split(/[.!?]/)[0]
     .replace(/\s+/g, " ")
     .trim();
-  if (!hint || hint.length > 80) return null;
+  if (!hint || hint.length > 140) return null;
   return hint;
 }
 

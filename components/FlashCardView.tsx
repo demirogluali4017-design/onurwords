@@ -33,7 +33,9 @@ export default function FlashCardView({ card, isFlipped, onFlip }: FlashCardView
             <SpeakButton text={card.word} />
           </div>
           {card.hint_word && (
-            <p className="text-sm text-amber-700 dark:text-amber-300">İpucu: {card.hint_word}</p>
+            <p className="max-w-md text-center text-base leading-snug text-amber-700 dark:text-amber-300">
+              {card.hint_word}
+            </p>
           )}
           <p className="text-sm text-slate-400 dark:text-slate-500 mt-4">Cevabı görmek için karta tıkla</p>
         </div>
