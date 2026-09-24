@@ -1,28 +1,33 @@
 "use client";
- 
+
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { supabase } from "@/lib/supabase";
 import { useTheme } from "@/lib/ThemeProvider";
 import { getTTSSettings, setTTSSettings } from "@/components/SpeakButton";
- 
+import { Flashcard, WordGroup } from "@/types";
+
 export default function SettingsPage() {
   const { theme, toggleTheme } = useTheme();
   const [rate, setRate] = useState(0.9);
   const [pitch, setPitch] = useState(1);
   const [mounted, setMounted] = useState(false);
- 
+
   const [dailyNewGoal, setDailyNewGoal] = useState(10);
   const [dailyReviewGoal, setDailyReviewGoal] = useState(30);
   const [goalsLoaded, setGoalsLoaded] = useState(false);
   const [savingGoals, setSavingGoals] = useState(false);
- 
+  const [exporting, setExporting] = useState(false);
+  const [exportNote, setExportNote] = useState<string | null>(null);
+  const [testingMail, setTestingMail] = useState(false);
+  const [mailNote, setMailNote] = useState<string | null>(null);
+
   useEffect(() => {
     const s = getTTSSettings();
     setRate(s.rate);
     setPitch(s.pitch);
     setMounted(true);
- 
+
     async function loadGoals() {
       const { data } = await supabase
         .from("app_settings")
@@ -37,7 +42,50 @@ export default function SettingsPage() {
     }
     loadGoals();
   }, []);
- 
+
+  async function downloadBackup() {
+    setExporting(true);
+    setExportNote(null);
+    try {
+      const PAGE = 1000;
+      const flashcards: Flashcard[] = [];
+      let from = 0;
+      while (true) {
+        const { data, error } = await supabase
+          .from("flashcards")
+          .select("*")
+          .order("created_at", { ascending: true })
+          .range(from, from + PAGE - 1);
+        if (error) throw error;
+        const rows = (data ?? []) as Flashcard[];
+        flashcards.push(...rows);
+        if (rows.length < PAGE) break;
+        from += PAGE;
+      }
+
+      const { data: groups, error: groupError } = await supabase.from("word_groups").select("*");
+      if (groupError) throw groupError;
+
+      const payload = {
+        exported_at: new Date().toISOString(),
+        flashcards,
+        word_groups: (groups ?? []) as WordGroup[],
+      };
+      const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `quizanki-en-yedek-${new Date().toISOString().slice(0, 10)}.json`;
+      link.click();
+      URL.revokeObjectURL(url);
+      setExportNote(`${flashcards.length} kelime indirildi.`);
+    } catch {
+      setExportNote("Yedek alınamadı.");
+    } finally {
+      setExporting(false);
+    }
+  }
+
   async function saveGoals() {
     setSavingGoals(true);
     await supabase
@@ -50,27 +98,45 @@ export default function SettingsPage() {
       .eq("id", 1);
     setSavingGoals(false);
   }
- 
+
+  async function sendTestMail() {
+    setTestingMail(true);
+    setMailNote(null);
+    try {
+      const res = await fetch("/api/send-reminder", { method: "POST" });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setMailNote(data.error || "Deneme maili gidemedi.");
+        return;
+      }
+      setMailNote(`Gönderildi: ${data.to}. Gelen kutusuna ve spam klasörüne bak.`);
+    } catch {
+      setMailNote("Deneme maili gidemedi.");
+    } finally {
+      setTestingMail(false);
+    }
+  }
+
   function updateRate(value: number) {
     setRate(value);
     setTTSSettings(value, pitch);
   }
- 
+
   function updatePitch(value: number) {
     setPitch(value);
     setTTSSettings(rate, value);
   }
- 
+
   function testVoice() {
     if (typeof window === "undefined" || !("speechSynthesis" in window)) return;
     window.speechSynthesis.cancel();
     const utterance = new SpeechSynthesisUtterance("Bonjour, comment ça va ?");
-    utterance.lang = "fr-FR";
+    utterance.lang = "en-US";
     utterance.rate = rate;
     utterance.pitch = pitch;
     window.speechSynthesis.speak(utterance);
   }
- 
+
   return (
     <main className="min-h-screen bg-slate-50 dark:bg-slate-950 px-6 py-12">
       <div className="max-w-2xl mx-auto space-y-8">
@@ -80,7 +146,37 @@ export default function SettingsPage() {
             ← Ana sayfaya dön
           </Link>
         </div>
- 
+
+        <section className="rounded-2xl bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 shadow-sm p-6 space-y-4">
+          <h2 className="font-semibold text-slate-800 dark:text-slate-100">Yedek</h2>
+          <p className="text-sm text-slate-500 dark:text-slate-400">
+            Kelimeler, anlamlar, tekrarlar ve gruplar JSON dosyasına iner.
+          </p>
+          <button
+            onClick={downloadBackup}
+            disabled={exporting}
+            className="w-full rounded-lg bg-indigo-600 text-white font-medium py-2.5 hover:bg-indigo-700 transition-colors text-sm disabled:opacity-60"
+          >
+            {exporting ? "Hazırlanıyor..." : "Yedek indir"}
+          </button>
+          {exportNote && <p className="text-xs text-slate-400 dark:text-slate-500">{exportNote}</p>}
+        </section>
+
+        <section className="rounded-2xl bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 shadow-sm p-6 space-y-4">
+          <h2 className="font-semibold text-slate-800 dark:text-slate-100">Hatırlatma</h2>
+          <p className="text-sm text-slate-500 dark:text-slate-400">
+            Öğlen mailinin aynısını şimdi bir kez gönderir.
+          </p>
+          <button
+            onClick={sendTestMail}
+            disabled={testingMail}
+            className="w-full rounded-lg bg-indigo-600 text-white font-medium py-2.5 hover:bg-indigo-700 transition-colors text-sm disabled:opacity-60"
+          >
+            {testingMail ? "Gönderiliyor..." : "Deneme maili gönder"}
+          </button>
+          {mailNote && <p className="text-xs text-slate-400 dark:text-slate-500">{mailNote}</p>}
+        </section>
+
         {/* Görünüm */}
         <section className="rounded-2xl bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 shadow-sm p-6 space-y-4">
           <h2 className="font-semibold text-slate-800 dark:text-slate-100">🎨 Görünüm</h2>
@@ -105,11 +201,11 @@ export default function SettingsPage() {
             </button>
           </div>
         </section>
- 
+
         {/* Günlük Hedef */}
         <section className="rounded-2xl bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 shadow-sm p-6 space-y-5">
           <h2 className="font-semibold text-slate-800 dark:text-slate-100">🎯 Günlük Hedef</h2>
- 
+
           {goalsLoaded && (
             <>
               <div className="space-y-2">
@@ -127,7 +223,7 @@ export default function SettingsPage() {
                   className="w-full accent-emerald-600"
                 />
               </div>
- 
+
               <div className="space-y-2">
                 <div className="flex items-center justify-between text-sm">
                   <label className="text-slate-600 dark:text-slate-300">Günlük tekrar hedefi</label>
@@ -143,7 +239,7 @@ export default function SettingsPage() {
                   className="w-full accent-indigo-600"
                 />
               </div>
- 
+
               <button
                 onClick={saveGoals}
                 disabled={savingGoals}
@@ -151,18 +247,18 @@ export default function SettingsPage() {
               >
                 {savingGoals ? "Kaydediliyor..." : "Hedefleri Kaydet"}
               </button>
- 
+
               <p className="text-xs text-slate-400 dark:text-slate-500">
                 Bu hedef tüm cihazlarda ortak — ana sayfadaki ilerleme çubukları buna göre dolar.
               </p>
             </>
           )}
         </section>
- 
+
         {/* Sesli Okuma (TTS) */}
         <section className="rounded-2xl bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 shadow-sm p-6 space-y-5">
           <h2 className="font-semibold text-slate-800 dark:text-slate-100">🔊 Sesli Telaffuz</h2>
- 
+
           {mounted && (
             <>
               <div className="space-y-2">
@@ -180,7 +276,7 @@ export default function SettingsPage() {
                   className="w-full accent-indigo-600"
                 />
               </div>
- 
+
               <div className="space-y-2">
                 <div className="flex items-center justify-between text-sm">
                   <label className="text-slate-600 dark:text-slate-300">Perde (Pitch)</label>
@@ -196,21 +292,21 @@ export default function SettingsPage() {
                   className="w-full accent-indigo-600"
                 />
               </div>
- 
+
               <button
                 onClick={testVoice}
                 className="w-full rounded-lg bg-slate-100 dark:bg-slate-700 text-slate-700 dark:text-slate-200 font-medium py-2 hover:bg-slate-200 dark:hover:bg-slate-600 transition-colors text-sm"
               >
                 🔊 Test Et: &quot;Bonjour, comment ça va ?&quot;
               </button>
- 
+
               <p className="text-xs text-slate-400 dark:text-slate-500">
-                Tarayıcının yerleşik Fransızca (fr-FR) sesi kullanılır. Cihazına göre ses kalitesi değişebilir.
+                Tarayıcının yerleşik İngilizce (en-US) sesi kullanılır. Cihazına göre ses kalitesi değişebilir.
               </p>
             </>
           )}
         </section>
- 
+
         <p className="text-xs text-slate-400 dark:text-slate-500 text-center">
           Daha fazla ayar (günlük hedef, SM-2 geçiş eşiği vb.) yakında burada olacak.
         </p>

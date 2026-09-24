@@ -3,7 +3,9 @@
 import { useState } from "react";
 import Link from "next/link";
 import MultiFileUploadZone from "@/components/MultiFileUploadZone";
+import OcrWordPicker from "@/components/OcrWordPicker";
 import { compressImages } from "@/lib/imageCompression";
+import { recognizeImages } from "@/lib/ocr";
 import { Flashcard } from "@/types";
 
 type ProcessState = "idle" | "processing" | "success" | "error";
@@ -68,6 +70,54 @@ function PhotoUploadPanel() {
   const [state, setState] = useState<ProcessState>("idle");
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [savedWords, setSavedWords] = useState<Flashcard[]>([]);
+  const [ocrPages, setOcrPages] = useState<
+    {
+      url: string;
+      label: string;
+      tokens: Awaited<ReturnType<typeof recognizeImages>>[number]["tokens"];
+      pairs: Awaited<ReturnType<typeof recognizeImages>>[number]["pairs"];
+      width: number;
+      height: number;
+    }[] | null
+  >(null);
+  const [ocrProgress, setOcrProgress] = useState<string | null>(null);
+  const [ocrError, setOcrError] = useState<string | null>(null);
+
+  function clearOcr(pages = ocrPages) {
+    pages?.forEach((page) => URL.revokeObjectURL(page.url));
+    setOcrPages(null);
+    setOcrProgress(null);
+    setOcrError(null);
+  }
+
+  async function handleOcr() {
+    if (selectedFiles.length === 0 || ocrProgress) return;
+    clearOcr();
+    setOcrError(null);
+    try {
+      setOcrProgress("Fotoğraflar hazırlanıyor…");
+      const compressed = await compressImages(selectedFiles);
+      const recognized = await recognizeImages(compressed, (index, progress) => {
+        setOcrProgress(
+          `Sayfa ${index + 1}/${compressed.length} okunuyor… %${Math.round(progress * 100)}`
+        );
+      });
+      setOcrPages(
+        recognized.map((result, index) => ({
+          url: URL.createObjectURL(compressed[index]),
+          label: `Sayfa ${index + 1}`,
+          tokens: result.tokens,
+          pairs: result.pairs,
+          width: result.width,
+          height: result.height,
+        }))
+      );
+      setOcrProgress(null);
+    } catch (err) {
+      setOcrProgress(null);
+      setOcrError(err instanceof Error ? err.message : "Fotoğraf okunamadı.");
+    }
+  }
 
   async function handleProcess() {
     if (selectedFiles.length === 0) return;
@@ -89,7 +139,19 @@ function PhotoUploadPanel() {
       const data = await res.json();
 
       if (!res.ok) {
-        throw new Error(data.error || "Bilinmeyen bir hata oluştu.");
+        const message = String(data.error || "");
+        const busy =
+          res.status === 503 ||
+          res.status === 429 ||
+          data.retryable === true ||
+          /yoğun|kullanılamıyor|unavailable/i.test(message);
+        if (busy) {
+          setState("idle");
+          setErrorMessage(message || "Gemini şu anda yoğun.");
+          await handleOcr();
+          return;
+        }
+        throw new Error(message || "Bilinmeyen bir hata oluştu.");
       }
 
       setSavedWords(data.words ?? []);
@@ -114,26 +176,54 @@ function PhotoUploadPanel() {
           setSelectedFiles(files);
           setState("idle");
           setSavedWords([]);
+          clearOcr();
         }}
-        disabled={state === "processing"}
+        disabled={state === "processing" || Boolean(ocrProgress)}
       />
 
-      {selectedFiles.length > 0 && state !== "success" && (
-        <button
-          onClick={handleProcess}
-          disabled={state === "processing"}
-          className="w-full rounded-xl bg-indigo-600 text-white font-medium py-3 hover:bg-indigo-700 transition-colors disabled:opacity-60 disabled:cursor-not-allowed flex items-center justify-center gap-2"
-        >
-          {state === "processing" ? (
-            <>
-              <span className="w-4 h-4 border-2 border-white/40 border-t-white rounded-full animate-spin" />
-              Gemini {selectedFiles.length} sayfayı analiz ediyor...
-            </>
-          ) : (
-            `${selectedFiles.length} Sayfayı İşle ve Kelimeleri Çıkar`
-          )}
-        </button>
+      {selectedFiles.length > 0 && state !== "success" && !ocrPages && (
+        <div className="space-y-2">
+          <button
+            onClick={handleProcess}
+            disabled={state === "processing" || Boolean(ocrProgress)}
+            className="w-full rounded-xl bg-indigo-600 py-3 font-medium text-white transition-colors hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {state === "processing" ? (
+              <span className="flex items-center justify-center gap-2">
+                <span className="h-4 w-4 animate-spin rounded-full border-2 border-white/40 border-t-white" />
+                Gemini {selectedFiles.length} sayfayı analiz ediyor...
+              </span>
+            ) : (
+              `${selectedFiles.length} Sayfayı İşle ve Kelimeleri Çıkar`
+            )}
+          </button>
+          <button
+            onClick={handleOcr}
+            disabled={state === "processing" || Boolean(ocrProgress)}
+            className="flex w-full items-center justify-center gap-2 rounded-xl border border-slate-300 bg-white py-3 font-medium text-slate-700 transition-colors hover:border-indigo-400 disabled:cursor-not-allowed disabled:opacity-60 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-200"
+          >
+            {ocrProgress ? (
+              <>
+                <span className="h-4 w-4 animate-spin rounded-full border-2 border-indigo-300 border-t-indigo-700" />
+                {ocrProgress}
+              </>
+            ) : (
+              "OCR ile kelime seç"
+            )}
+          </button>
+          <p className="text-xs text-slate-400">
+            Önce Gemini dener. Yoğunsa kelimeleri buradan seçersin.
+          </p>
+        </div>
       )}
+
+      {ocrError && (
+        <div className="rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-700 dark:bg-red-950">
+          ⚠️ {ocrError}
+        </div>
+      )}
+
+      {ocrPages && <OcrWordPicker pages={ocrPages} onClose={() => clearOcr()} />}
 
       {state === "error" && errorMessage && (
         <div className="rounded-xl bg-red-50 dark:bg-red-950 border border-red-200 text-red-700 p-4 text-sm">
@@ -234,19 +324,19 @@ function ManualAddPanel() {
   return (
     <div className="space-y-4">
       <form onSubmit={handleSubmit} className="rounded-2xl bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 shadow-sm p-6 space-y-4">
-        <Field label="Kelime *" value={word} onChange={setWord} placeholder="ör. improve" required />
+        <Field label="Kelime *" value={word} onChange={setWord} placeholder="ör. améliorer" required />
         <Field
           label="Preposition (edat)"
           value={preposition}
           onChange={setPreposition}
-          placeholder="ör. on sb/sth (varsa)"
+          placeholder="ör. à qn/qch (varsa)"
         />
         <Field label="Anlam (Türkçe) *" value={meaning} onChange={setMeaning} placeholder="ör. geliştirmek" required />
         <Field
           label="Örnek Cümle (İngilizce)"
           value={exampleSentence}
           onChange={setExampleSentence}
-          placeholder="ör. We need to improve this project."
+          placeholder="ör. Il faut améliorer ce projet."
           textarea
         />
 

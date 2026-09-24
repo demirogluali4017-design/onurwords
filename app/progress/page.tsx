@@ -1,19 +1,23 @@
 import Link from "next/link";
-import { supabase } from "@/lib/supabase";
+import { createSupabaseServerClient } from "@/lib/supabase-server";
+import { fetchAllRows } from "@/lib/fetchAll";
 import { computeStreaks } from "@/lib/dailyActivity";
 import {
   deriveLearningStage,
   LEARNING_STAGE_LABELS,
 } from "@/lib/studyEngine";
 import { Flashcard, LearningStage } from "@/types";
+import StruggledWords from "@/components/StruggledWords";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
 export const fetchCache = "force-no-store";
 
 async function getProgressData() {
-  const { data: cardRows } = await supabase.from("flashcards").select("*");
-  const cards = (cardRows ?? []) as Flashcard[];
+  const supabase = await createSupabaseServerClient();
+  const cards = await fetchAllRows<Flashcard>((from, to) =>
+    supabase.from("flashcards").select("*").range(from, to)
+  );
 
   const { data: activityRows } = await supabase
     .from("daily_activity")
@@ -217,14 +221,15 @@ export default async function ProgressPage() {
             {mostStruggled.length === 0 ? (
               <p className="text-sm text-slate-400 dark:text-slate-500">Henüz yeterli veri yok (en az 3 cevap gerekiyor).</p>
             ) : (
-              <ul className="space-y-2 text-sm">
-                {mostStruggled.map(({ card, rate }) => (
-                  <li key={card.id} className="flex items-center justify-between">
-                    <span className="text-slate-700 dark:text-slate-200 font-medium">{card.word}</span>
-                    <span className="text-red-600 font-semibold">%{Math.round((rate ?? 0) * 100)}</span>
-                  </li>
-                ))}
-              </ul>
+              <StruggledWords
+                items={mostStruggled.map(({ card, rate }) => ({
+                  id: card.id,
+                  word: card.word,
+                  meaning: card.meaning,
+                  example: card.example_sentence,
+                  rate: Math.round((rate ?? 0) * 100),
+                }))}
+              />
             )}
           </section>
         </div>

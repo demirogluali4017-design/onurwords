@@ -3,6 +3,7 @@
 import { useEffect, useState, useCallback, useMemo } from "react";
 import Link from "next/link";
 import { supabase } from "@/lib/supabase";
+import { fetchAllRows } from "@/lib/fetchAll";
 import { calculateSM2 } from "@/lib/sm2";
 import { logDailyActivity } from "@/lib/dailyActivity";
 import { Flashcard, SelfAssessment, StudyQuestion } from "@/types";
@@ -44,14 +45,15 @@ export default function StudyPage() {
 
   const loadCards = useCallback(async () => {
     setPhase("loading");
-    const { data, error } = await supabase.from("flashcards").select("*");
+    const cards = await fetchAllRows<Flashcard>((from, to) =>
+      supabase.from("flashcards").select("*").range(from, to)
+    );
 
-    if (error || !data) {
+    if (cards.length === 0) {
       setPhase("empty");
       return;
     }
 
-    const cards = data as Flashcard[];
     setAllCards(cards);
 
     const pkg = buildDailyPackage(cards);

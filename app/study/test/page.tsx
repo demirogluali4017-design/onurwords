@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { supabase } from "@/lib/supabase";
+import { fetchAllRows } from "@/lib/fetchAll";
 import { Flashcard, StudyQuestion } from "@/types";
 import { buildTestQuestion, getTestableWord } from "@/lib/studyEngine";
 
@@ -57,16 +58,17 @@ export default function TestModePage() {
   useEffect(() => {
     async function setup() {
       setPhase("loading");
-      const { data, error } = await supabase.from("flashcards").select("*");
+      const cards = await fetchAllRows<Flashcard>((from, to) =>
+        supabase.from("flashcards").select("*").range(from, to)
+      );
 
       await fetchPersonalBest();
 
-      if (error || !data || data.length === 0) {
+      if (cards.length === 0) {
         setPhase("empty");
         return;
       }
 
-      const cards = data as Flashcard[];
       setAllCards(cards);
 
       const picked = shuffle(cards).slice(0, Math.min(TEST_LENGTH, cards.length));

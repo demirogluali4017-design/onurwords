@@ -72,8 +72,8 @@ export type SelfAssessment = "forgot" | "struggled" | "recalled" | "easy";
 // Soru motorunun üretebileceği soru tipleri
 export type QuestionType =
   | "recall" // Kelimeyi gör, zihinden hatırla, cevabı göster (temel akış)
-  | "mcq_fr_to_tr" // Hedef dil kelime → doğru Türkçe anlamı seç
-  | "mcq_tr_to_fr" // Türkçe anlam → doğru hedef dil kelimeyi seç
+  | "mcq_fr_to_tr" // İngilizce kelime → doğru Türkçe anlamı seç
+  | "mcq_tr_to_fr" // Türkçe anlam → doğru İngilizce kelimeyi seç
   | "fill_blank" // Örnek cümlede boşluk doldurma (çoktan seçmeli)
   | "synonym"; // Aynı gruptaki eş anlamlı kelimeyi seç
 

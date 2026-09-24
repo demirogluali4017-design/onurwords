@@ -3,22 +3,42 @@ import { GoogleGenAI } from "@google/genai";
 import { createServiceRoleClient } from "@/lib/supabase";
 
 export const runtime = "nodejs";
-export const maxDuration = 60;
+export const maxDuration = 45;
 
-const BATCH_SIZE = 150; // tek Gemini isteğinde işlenecek kelime sayısı
+const BATCH_SIZE = 80; // her istekte işlenecek kelime sayısı (hız + zaman aşımı güvenliği için düşürüldü)
+const MAX_EXISTING_GROUPS_IN_PROMPT = 200; // prompt'u şişirmemek için
 
-const GROUPING_PROMPT = `Aşağıda "id | kelime | Türkçe anlam" formatında bir kelime listesi var. Bu kelimeleri Türkçe anlamlarına göre incele ve AYNI veya ÇOK YAKIN anlama gelen (eş anlamlı sayılabilecek) kelimeleri kümelere ayır.
+function buildPrompt(batch: WordRow[], existingGroups: GroupRow[]): string {
+  const groupsText =
+    existingGroups.length > 0
+      ? existingGroups
+          .slice(0, MAX_EXISTING_GROUPS_IN_PROMPT)
+          .map((g) => `${g.id} | ${g.name}`)
+          .join("\n")
+      : "(henüz hiç grup yok)";
 
-Kurallar:
-- Bir kümede EN AZ 2 kelime olmalı. Tek başına kalan (başka hiçbir kelimeyle eşleşmeyen) kelimeleri HİÇBİR kümeye dahil etme, sonuçtan tamamen çıkar.
-- Sadece anlamca gerçekten örtüşen kelimeleri aynı kümeye koy — yüzeysel benzerlik yeterli değil, gerçekten eş anlamlı/çok yakın anlamlı olmalı.
-- Her küme için kısa, açıklayıcı bir Türkçe grup adı üret (örn. "artırmak/büyütmek", "belirsiz/muğlak").
-- Bir kelime sadece TEK bir kümede olabilir.
-- Yanıtı SADECE JSON array olarak ver, başka hiçbir açıklama ekleme. Format:
-[{"group_name": "...", "word_ids": ["id1", "id2", ...]}]
+  const wordsText = batch.map((w) => `${w.id} | ${w.word} | ${w.meaning}`).join("\n");
 
-Liste:
-`;
+  return `Aşağıda mevcut eş anlamlı gruplar ve grupsuz kelimeler var.
+
+MEVCUT GRUPLAR (id | grup adı):
+${groupsText}
+
+GRUPSUZ KELİMELER (id | kelime | Türkçe anlam):
+${wordsText}
+
+Görev: Her grupsuz kelime için Türkçe anlamına bakarak KARAR VER:
+1. Eğer kelime, MEVCUT gruplardan biriyle anlamca gerçekten örtüşüyorsa (eş anlamlı/çok yakın anlamlıysa), o kelimeyi o grubun id'sine ekle.
+2. Eğer grupsuz kelimeler arasında birbirleriyle eşleşen ama hiçbir mevcut grupla örtüşmeyen kelimeler varsa, onlar için YENİ bir grup öner (en az 2 kelime).
+3. Hiçbir kelimeyle eşleşmeyen kelimeleri hiçbir yere dahil etme, sonuçtan çıkar.
+4. Sadece gerçekten örtüşen anlamları eşleştir, yüzeysel benzerlik yeterli değil.
+
+Yanıtı SADECE JSON array olarak ver, başka açıklama ekleme. Format:
+[
+  {"action":"existing","group_id":"...","word_ids":["id1","id2"]},
+  {"action":"new","group_name":"...","word_ids":["id3","id4"]}
+]`;
+}
 
 function collectApiKeys(): string[] {
   const keys: string[] = [];
@@ -47,15 +67,19 @@ interface WordRow {
   meaning: string;
 }
 
-interface GeminiCluster {
-  group_name: string;
+interface GroupRow {
+  id: string;
+  name: string;
+}
+
+interface GeminiDecision {
+  action: "existing" | "new";
+  group_id?: string;
+  group_name?: string;
   word_ids: string[];
 }
 
-async function callGeminiForBatch(batch: WordRow[], apiKeys: string[]): Promise<GeminiCluster[]> {
-  const listText = batch.map((w) => `${w.id} | ${w.word} | ${w.meaning}`).join("\n");
-  const prompt = GROUPING_PROMPT + listText;
-
+async function callGemini(prompt: string, apiKeys: string[]): Promise<GeminiDecision[]> {
   let lastError: unknown = null;
 
   for (let keyIndex = 0; keyIndex < apiKeys.length; keyIndex++) {
@@ -79,7 +103,7 @@ async function callGeminiForBatch(batch: WordRow[], apiKeys: string[]): Promise<
 
       const parsed = JSON.parse(cleaned);
       if (!Array.isArray(parsed)) throw new Error("Gemini yanıtı JSON array değil.");
-      return parsed as GeminiCluster[];
+      return parsed as GeminiDecision[];
     } catch (err) {
       lastError = err;
       const hasNextKey = keyIndex < apiKeys.length - 1;
@@ -91,6 +115,15 @@ async function callGeminiForBatch(batch: WordRow[], apiKeys: string[]): Promise<
   throw lastError ?? new Error("Bilinmeyen hata");
 }
 
+/**
+ * Bu endpoint HER ÇAĞRIDA SADECE BİR PARÇA (BATCH_SIZE kadar) grupsuz
+ * kelime işler ve döner — Vercel'in 45sn'lik zaman aşımına asla
+ * yaklaşmaz. Çoklu parça, İSTEMCİ TARAFINDA (words/page.tsx) bu
+ * endpoint'i döngüyle tekrar tekrar çağırarak işlenir. Her çağrı,
+ * mevcut grupları da Gemini'ye context olarak veriyor — böylece bir
+ * önceki çağrıda oluşan grup, bu çağrıdaki kelimeye de açık oluyor
+ * (parçalar arası eş anlamlı kaçırma sorunu böyle çözülüyor).
+ */
 export async function POST(_request: NextRequest) {
   try {
     const apiKeys = collectApiKeys();
@@ -103,85 +136,115 @@ export async function POST(_request: NextRequest) {
 
     const supabaseAdmin = createServiceRoleClient();
 
-    // Sadece grupsuz kelimeleri işle (zaten gruplanmış olanlara dokunma)
-    let allUngrouped: WordRow[] = [];
-    let from = 0;
-    while (true) {
-      const { data, error } = await supabaseAdmin
-        .from("flashcards")
-        .select("id, word, meaning")
-        .is("group_id", null)
-        .range(from, from + 999);
-      if (error || !data) break;
-      allUngrouped = allUngrouped.concat(data as WordRow[]);
-      if (data.length < 1000) break;
-      from += 1000;
+    const { data: ungroupedPage, error: fetchError } = await supabaseAdmin
+      .from("flashcards")
+      .select("id, word, meaning")
+      .is("group_id", null)
+      .limit(BATCH_SIZE);
+
+    if (fetchError) {
+      return NextResponse.json(
+        { error: "Kelimeler okunamadı.", details: fetchError.message },
+        { status: 500 }
+      );
     }
 
-    if (allUngrouped.length < 2) {
+    const batch = (ungroupedPage ?? []) as WordRow[];
+
+    if (batch.length < 2) {
       return NextResponse.json({
         success: true,
+        done: true,
+        processed: batch.length,
         groupsCreated: 0,
         wordsGrouped: 0,
-        message: "Gruplanacak yeterli grupsuz kelime yok.",
+        remainingUngrouped: 0,
       });
     }
 
-    // Batch'lere böl
-    const batches: WordRow[][] = [];
-    for (let i = 0; i < allUngrouped.length; i += BATCH_SIZE) {
-      batches.push(allUngrouped.slice(i, i + BATCH_SIZE));
-    }
+    const { count: remainingBefore } = await supabaseAdmin
+      .from("flashcards")
+      .select("id", { count: "exact", head: true })
+      .is("group_id", null);
+
+    const { data: existingGroups } = await supabaseAdmin
+      .from("word_groups")
+      .select("id, name")
+      .order("created_at", { ascending: false })
+      .limit(MAX_EXISTING_GROUPS_IN_PROMPT);
+
+    const prompt = buildPrompt(batch, (existingGroups ?? []) as GroupRow[]);
+    const decisions = await callGemini(prompt, apiKeys);
+
+    const validIds = new Set(batch.map((w) => w.id));
+    const existingGroupIds = new Set((existingGroups ?? []).map((g) => g.id));
 
     let groupsCreated = 0;
     let wordsGrouped = 0;
     const errors: string[] = [];
 
-    for (const batch of batches) {
-      try {
-        const clusters = await callGeminiForBatch(batch, apiKeys);
-        const validIds = new Set(batch.map((w) => w.id));
+    for (const decision of decisions) {
+      const ids = (decision.word_ids ?? []).filter((id) => validIds.has(id));
 
-        for (const cluster of clusters) {
-          const ids = (cluster.word_ids ?? []).filter((id) => validIds.has(id));
-          if (ids.length < 2) continue; // tek kelimelik kümeleri atla
-
-          const { data: newGroup, error: groupError } = await supabaseAdmin
-            .from("word_groups")
-            .insert({ name: cluster.group_name || "Grup" })
-            .select()
-            .single();
-
-          if (groupError || !newGroup) {
-            errors.push(`Grup oluşturulamadı: ${groupError?.message}`);
-            continue;
-          }
-
-          const { error: updateError } = await supabaseAdmin
-            .from("flashcards")
-            .update({ group_id: newGroup.id })
-            .in("id", ids);
-
-          if (updateError) {
-            errors.push(`Kelimeler güncellenemedi: ${updateError.message}`);
-            continue;
-          }
-
-          groupsCreated += 1;
-          wordsGrouped += ids.length;
+      if (decision.action === "existing") {
+        if (ids.length === 0 || !decision.group_id || !existingGroupIds.has(decision.group_id)) {
+          continue;
         }
-      } catch (err) {
-        const message = err instanceof Error ? err.message : "Bilinmeyen hata";
-        errors.push(`Batch hatası: ${message}`);
+        const { error: updateError } = await supabaseAdmin
+          .from("flashcards")
+          .update({ group_id: decision.group_id })
+          .in("id", ids);
+        if (updateError) {
+          errors.push(`Gruba ekleme hatası: ${updateError.message}`);
+          continue;
+        }
+        wordsGrouped += ids.length;
+      } else if (decision.action === "new") {
+        if (ids.length < 2) continue;
+
+        const { data: newGroup, error: groupError } = await supabaseAdmin
+          .from("word_groups")
+          .insert({ name: decision.group_name || "Grup" })
+          .select()
+          .single();
+
+        if (groupError || !newGroup) {
+          errors.push(`Grup oluşturulamadı: ${groupError?.message}`);
+          continue;
+        }
+
+        const { error: updateError } = await supabaseAdmin
+          .from("flashcards")
+          .update({ group_id: newGroup.id })
+          .in("id", ids);
+
+        if (updateError) {
+          errors.push(`Kelimeler güncellenemedi: ${updateError.message}`);
+          continue;
+        }
+
+        groupsCreated += 1;
+        wordsGrouped += ids.length;
       }
     }
 
+    const { count: remainingAfter } = await supabaseAdmin
+      .from("flashcards")
+      .select("id", { count: "exact", head: true })
+      .is("group_id", null);
+
+    // Bu batch'te hiç ilerleme kaydedilmediyse (örn. tüm kelimeler
+    // gerçekten eşleşmiyordu) sonsuz döngüye girmemek için done=true
+    // döndür — istemci farklı bir batch'e geçmez, işlemi bitirir.
+    const madeProgress = (remainingAfter ?? 0) < (remainingBefore ?? 0);
+
     return NextResponse.json({
       success: true,
+      done: !madeProgress || (remainingAfter ?? 0) === 0,
+      processed: batch.length,
       groupsCreated,
       wordsGrouped,
-      totalProcessed: allUngrouped.length,
-      batchCount: batches.length,
+      remainingUngrouped: remainingAfter ?? 0,
       errors: errors.length > 0 ? errors : undefined,
     });
   } catch (err) {

@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { supabase } from "@/lib/supabase";
+import { fetchAllRows } from "@/lib/fetchAll";
 import { Flashcard } from "@/types";
 import FlashCardView from "@/components/FlashCardView";
 
@@ -15,14 +16,10 @@ export default function CardsBrowsePage() {
   useEffect(() => {
     async function fetchCards() {
       setLoading(true);
-      const { data, error } = await supabase
-        .from("flashcards")
-        .select("*")
-        .order("created_at", { ascending: false });
-
-      if (!error && data) {
-        setCards(data as Flashcard[]);
-      }
+      const data = await fetchAllRows<Flashcard>((from, to) =>
+        supabase.from("flashcards").select("*").order("created_at", { ascending: false }).range(from, to)
+      );
+      setCards(data);
       setLoading(false);
     }
     fetchCards();

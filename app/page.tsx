@@ -1,16 +1,19 @@
-import Link from "next/link";
-import { supabase } from "@/lib/supabase";
+import { createSupabaseServerClient } from "@/lib/supabase-server";
+import { fetchAllRows } from "@/lib/fetchAll";
 import { buildDailyPackage } from "@/lib/studyEngine";
 import { computeStreaks } from "@/lib/dailyActivity";
 import { Flashcard } from "@/types";
+import MotiveLine from "@/components/MotiveLine";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
 export const fetchCache = "force-no-store";
 
 async function getDashboardData() {
-  const { data, error } = await supabase.from("flashcards").select("*");
-  const cards = (error || !data ? [] : data) as Flashcard[];
+  const supabase = await createSupabaseServerClient();
+  const cards = await fetchAllRows<Flashcard>((from, to) =>
+    supabase.from("flashcards").select("*").range(from, to)
+  );
 
   const pkg = buildDailyPackage(cards);
 
@@ -76,8 +79,10 @@ export default async function HomePage() {
   const newProgress = Math.min(100, Math.round((todayNewWords / Math.max(1, dailyNewGoal)) * 100));
 
   return (
-    <main className="min-h-screen bg-slate-50 dark:bg-slate-950 flex flex-col items-center justify-center px-6 py-16">
-      <div className="max-w-2xl w-full text-center space-y-4">
+    <main className="min-h-screen bg-slate-50 dark:bg-slate-950 flex flex-col items-center px-6 pb-8 pt-14">
+      <MotiveLine />
+
+      <div className="max-w-2xl w-full text-center space-y-4 mt-10">
         <h1 className="text-4xl font-extrabold text-slate-900 dark:text-slate-50">
           📚 Flashcard <span className="text-indigo-600">Anki Klonu</span>
         </h1>
@@ -128,33 +133,6 @@ export default async function HomePage() {
           <p className="text-sm text-slate-400 dark:text-slate-500">🧠 Uzun Süreli Hafıza</p>
           <p className="text-3xl font-bold text-slate-800 dark:text-slate-100 mt-1">{longTermCount}</p>
         </div>
-      </div>
-
-      <div className="grid sm:grid-cols-4 gap-4 mt-10 max-w-2xl w-full">
-        <Link
-          href="/upload"
-          className="rounded-xl bg-slate-900 text-white font-medium py-4 px-6 text-center hover:bg-slate-800 transition-colors"
-        >
-          ⬆️ Kart Yükle
-        </Link>
-        <Link
-          href="/study"
-          className="rounded-xl bg-indigo-600 text-white font-medium py-4 px-6 text-center hover:bg-indigo-700 transition-colors"
-        >
-          🧠 Çalışmaya Başla {pkg.totalCount > 0 && `(${pkg.totalCount})`}
-        </Link>
-        <Link
-          href="/words"
-          className="rounded-xl bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-100 font-medium py-4 px-6 text-center border border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors"
-        >
-          📋 Tüm Kelimeler
-        </Link>
-        <Link
-          href="/progress"
-          className="rounded-xl bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-100 font-medium py-4 px-6 text-center border border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors"
-        >
-          📈 İlerleme
-        </Link>
       </div>
     </main>
   );

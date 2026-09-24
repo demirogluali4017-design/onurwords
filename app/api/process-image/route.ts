@@ -2,89 +2,19 @@ import { NextRequest, NextResponse } from "next/server";
 import { GoogleGenAI } from "@google/genai";
 import { createServiceRoleClient } from "@/lib/supabase";
 import { ExtractedWord } from "@/types";
-
 export const runtime = "nodejs";
 export const maxDuration = 60;
-
-const EXTRACTION_PROMPT = `
-You are a FAST vocabulary extraction assistant.
-
-Your task is to extract English vocabulary items from the uploaded image(s).
-
-IMPORTANT PERFORMANCE RULE:
-Do NOT spend excessive time trying to perfectly OCR the handwriting.
-If handwriting is unclear, partially unreadable, abbreviated, or messy,
-make the most reasonable linguistic guess based on the visible letters,
-context, surrounding words, and common English vocabulary.
-
-The goal is FAST and USEFUL extraction, not perfect OCR.
-
-Process ALL uploaded images in a single pass.
-If multiple images are provided, treat them as pages of the same document.
-
-RULES:
-
-1. WORD
-Extract the English vocabulary word exactly as reasonably readable.
-Do not invent completely unrelated words.
-If handwriting is unclear, choose the most plausible English word.
-
-2. PREPOSITION
-If the word is a verb/adjective/noun and a preposition pattern is visibly written,
-preserve the complete pattern.
-
-Examples:
-"depend on" -> "on"
-"listen to" -> "to"
-"interested in" -> "in"
-
-If patterns such as "sth", "sb", "something", "someone" are written,
-preserve them when useful.
-
-If there is no visible preposition pattern, use "".
-
-3. MEANING
-If a Turkish meaning is already written in the image,
-COPY THAT TURKISH MEANING as closely as possible.
-
-Do NOT replace it with your own synonym.
-Do NOT add alternative meanings unless necessary to understand the written word.
-
-If there is no Turkish meaning visible,
-generate the most common and useful Turkish meaning.
-
-4. EXAMPLE SENTENCE
-The example sentence MUST be in English.
-
-If an example sentence is visible in the image,
-preserve it as closely as possible.
-
-If there is no example sentence,
-create one short, natural and grammatically correct English sentence.
-
-5. DUPLICATES
-If the same vocabulary item appears more than once across the images,
-return it only ONCE.
-
-6. SPEED
-Do not provide explanations.
-Do not analyze the image unnecessarily.
-Do not try to reconstruct every unclear handwritten stroke.
-Make a reasonable best guess and continue.
-
-Return ONLY a valid JSON array.
-
+const EXTRACTION_PROMPT = `Bu görsel(ler)deki İngilizce kelimeleri çıkar. Birden fazla görsel verildiyse HEPSİNİ işle ve TEK bir birleşik JSON array olarak döndür (görseller ayrı sayfalar olabilir, sırayla işle). Kurallara KESİNLİKLE uy:
+1. "preposition" alanı: Kelimenin (özellikle fiillerin) görselde geçen TÜM edat ve phrasal verb kalıplarını EKSİKSİZ ve BİREBİR yaz.
+   - Görselde "sb" (somebody) veya "sth" (something) gibi kısaltmalar varsa bunları da kalıba dahil et, çıkarma. Örnek: "look after sb" görüldüyse preposition alanına tam olarak "after sb" yaz, sadece "after" yazma.
+   - Bir fiilin birden fazla kalıbı varsa (örn. "look at sth / look for sb") HEPSİNİ kaçırmadan yaz, virgülle ayırarak listele.
+   - Kelimenin yanında edat veya parçacık geçiyorsa bu alanı ASLA boş bırakma ve ASLA kısaltma; yoksa boş string ("") bırak.
+2. "meaning" alanı: Eğer görselde kelimenin Türkçe anlamı zaten YAZILI olarak veriliyorsa (defter/kitap sayfasında karşısında yazan Türkçe kelime/ifade), onu BİREBİR, HİÇBİR ŞEKİLDE DEĞİŞTİRMEDEN, PARAFRAZ YAPMADAN, EŞ ANLAMLISINI KULLANMADAN aynen yaz — kendi yorumunu veya alternatif çevirini KATMA. Görselde yazılı bir anlam YOKSA (sadece kelimenin kendisi varsa) o zaman doğru ve yaygın Türkçe anlamını sen üret.
+3. "example_sentence" alanı: SADECE ve KESİNLİKLE İngilizce bir örnek cümle yaz. Türkçe veya başka bir dilde örnek cümle YAZMA. Görselde kelimeyle birlikte bir örnek cümle varsa onu birebir kullan; yoksa kelimeye uygun basit, doğru dilbilgisiyle yazılmış yeni bir İngilizce cümle üret.
+4. Aynı kelime birden fazla görselde tekrar geçiyorsa SADECE BİR KEZ ekle (tekrar eden kaydı çıkarma).
+Yanıtı sadece ve strictly JSON array formatında döndür, başka hiçbir açıklama ekleme.
 Format:
-[
-  {
-    "word": "",
-    "preposition": "",
-    "meaning": "",
-    "example_sentence": ""
-  }
-]
-`;
-
+[{"word": "", "preposition": "", "meaning": "", "example_sentence": ""}]`;
 function extractJsonArray(rawText: string): ExtractedWord[] {
   const cleaned = rawText
     .trim()
@@ -92,99 +22,137 @@ function extractJsonArray(rawText: string): ExtractedWord[] {
     .replace(/^```\s*/i, "")
     .replace(/```\s*$/i, "")
     .trim();
-
   const parsed = JSON.parse(cleaned);
-
   if (!Array.isArray(parsed)) {
     throw new Error("Gemini yanıtı bir JSON array değil.");
   }
-
   return parsed as ExtractedWord[];
 }
-
+function collectApiKeys(): string[] {
+  const keys: string[] = [];
+  if (process.env.GEMINI_API_KEY) {
+    keys.push(process.env.GEMINI_API_KEY);
+  }
+  let i = 2;
+  while (process.env[`GEMINI_API_KEY_${i}`]) {
+    keys.push(process.env[`GEMINI_API_KEY_${i}`] as string);
+    i++;
+  }
+  return keys;
+}
 function isRetryableError(err: unknown): boolean {
-  const message = err instanceof Error ? err.message : String(err);
-
+  const error = err as {
+    message?: string;
+    status?: number | string;
+    code?: number | string;
+  };
+  const message = String(error?.message ?? err ?? "").toUpperCase();
+  const status = String(error?.status ?? error?.code ?? "");
   return (
+    status === "429" ||
+    status === "500" ||
+    status === "503" ||
     message.includes("429") ||
+    message.includes("500") ||
     message.includes("503") ||
     message.includes("RESOURCE_EXHAUSTED") ||
     message.includes("UNAVAILABLE") ||
-    message.includes("DEADLINE_EXCEEDED") ||
-    message.includes("TIMEOUT") ||
-    message.includes("timed out")
+    message.includes("SERVICE_UNAVAILABLE")
   );
 }
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+function getRetryDelay(attempt: number): number {
+  const baseDelay = 1000 * Math.pow(2, attempt);
+  const jitter = Math.floor(Math.random() * 500);
+  return baseDelay + jitter;
 }
-
+async function generateWithRetry(
+  ai: GoogleGenAI,
+  contents: any,
+  maxRetries = 3
+) {
+  let lastError: unknown = null;
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      return await ai.models.generateContent({
+        model: "gemini-3.6-flash",
+        contents,
+        config: {
+          responseMimeType: "application/json",
+          temperature: 0.2,
+        },
+      });
+    } catch (err) {
+      lastError = err;
+      if (!isRetryableError(err)) {
+        throw err;
+      }
+      if (attempt === maxRetries) {
+        throw err;
+      }
+      const delay = getRetryDelay(attempt);
+      console.warn(
+        `Gemini geçici hata verdi. Retry ${
+          attempt + 1
+        }/${maxRetries}. ${delay}ms sonra tekrar denenecek.`
+      );
+      await new Promise((resolve) =>
+        setTimeout(resolve, delay)
+      );
+    }
+  }
+  throw lastError;
+}
 export async function POST(request: NextRequest) {
   try {
-    const apiKey = process.env.GEMINI_API_KEY;
-
-    if (!apiKey) {
+    const apiKeys = collectApiKeys();
+    if (apiKeys.length === 0) {
       return NextResponse.json(
         {
-          error: "GEMINI_API_KEY ortam değişkeni tanımlı değil.",
+          error:
+            "GEMINI_API_KEY ortam değişkeni tanımlı değil.",
         },
         { status: 500 }
       );
     }
-
     const formData = await request.formData();
     const files = formData.getAll("images") as File[];
-
     if (!files || files.length === 0) {
       return NextResponse.json(
         {
-          error: "Görsel dosyası bulunamadı ('images' alanı gerekli).",
+          error:
+            "Görsel dosyası bulunamadı ('images' alanı gerekli).",
         },
         { status: 400 }
       );
     }
-
     const MAX_IMAGES = 3;
-
     if (files.length > MAX_IMAGES) {
       return NextResponse.json(
         {
-          error: `En fazla ${MAX_IMAGES} görsel yükleyebilirsin.`,
+          error: `En fazla ${MAX_IMAGES} görsel birden yükleyebilirsin.`,
         },
         { status: 400 }
       );
     }
-
     const allowedTypes = [
       "image/jpeg",
       "image/jpg",
       "image/png",
-      "image/webp",
     ];
-
     for (const file of files) {
       if (!allowedTypes.includes(file.type)) {
         return NextResponse.json(
           {
-            error:
-              "Sadece JPG, PNG veya WEBP görselleri destekleniyor.",
+            error: "Sadece JPG/PNG formatları destekleniyor.",
           },
           { status: 400 }
         );
       }
     }
-
-    /*
-     * Tüm görselleri tek Gemini isteğinde gönderiyoruz.
-     * Böylece 3 ayrı model çağrısı yapıp süreyi gereksiz yere artırmıyoruz.
-     */
     const imageParts = await Promise.all(
       files.map(async (file) => {
         const arrayBuffer = await file.arrayBuffer();
-
         const base64 = Buffer.from(arrayBuffer).toString("base64");
-
         return {
           inlineData: {
             mimeType: file.type,
@@ -193,167 +161,119 @@ export async function POST(request: NextRequest) {
         };
       })
     );
-
-    const ai = new GoogleGenAI({
-      apiKey,
-    });
-
+    const contents = [
+      {
+        role: "user",
+        parts: [
+          {
+            text: EXTRACTION_PROMPT,
+          },
+          ...imageParts,
+        ],
+      },
+    ];
     let rawText: string | undefined;
     let lastError: unknown = null;
-
-    /*
-     * İlk deneme.
-     * 503 / 429 gibi geçici hatalarda yalnızca 1 kısa retry.
-     *
-     * Tek API key kullanıldığı için uzun retry zinciri kurmuyoruz.
-     */
-    for (let attempt = 1; attempt <= 2; attempt++) {
+    let allRetryable = true;
+    for (
+      let keyIndex = 0;
+      keyIndex < apiKeys.length;
+      keyIndex++
+    ) {
+      const ai = new GoogleGenAI({
+        apiKey: apiKeys[keyIndex],
+      });
       try {
         console.log(
-          `Gemini extraction denemesi: ${attempt}/${2}`
+          `Gemini API key #${keyIndex + 1}/${apiKeys.length} deneniyor...`
         );
-
-        const response = await ai.models.generateContent({
-          model: "gemini-3.6-flash",
-          contents: [
-            {
-              role: "user",
-              parts: [
-                {
-                  text: EXTRACTION_PROMPT,
-                },
-                ...imageParts,
-              ],
-            },
-          ],
-          config: {
-            responseMimeType: "application/json",
-            temperature: 0.1,
-            maxOutputTokens: 2048,
-          },
-        });
-
+        const response = await generateWithRetry(
+          ai,
+          contents,
+          3
+        );
         rawText = response.text;
         lastError = null;
-
+        console.log(
+          `Gemini API key #${keyIndex + 1} başarılı.`
+        );
         break;
       } catch (err) {
         lastError = err;
-
-        console.error(
-          `Gemini extraction hatası - deneme ${attempt}:`,
-          err
-        );
-
-        const retryable = isRetryableError(err);
-
-        if (!retryable || attempt >= 2) {
+        if (!isRetryableError(err)) {
+          allRetryable = false;
+          console.error(
+            `Gemini API key #${keyIndex + 1} geri döndürülemez hata verdi:`,
+            err
+          );
           throw err;
         }
-
-        /*
-         * Kısa bekleme.
-         * Uzun 5-10 saniyelik backoff kullanmıyoruz çünkü
-         * Vercel'in 60 saniyelik function süresini tüketebilir.
-         */
-        await sleep(1200);
+        const hasNextKey =
+          keyIndex < apiKeys.length - 1;
+        if (hasNextKey) {
+          console.warn(
+            `Gemini API key #${keyIndex + 1} başarısız oldu. Sıradaki key deneniyor.`
+          );
+          continue;
+        }
+        console.error(
+          "Tüm Gemini API key'leri başarısız oldu:",
+          err
+        );
       }
     }
-
-    if (lastError) {
-      throw lastError;
-    }
-
     if (!rawText) {
-      return NextResponse.json(
-        {
-          error: "Gemini boş yanıt döndürdü.",
-          retryable: true,
-        },
-        { status: 502 }
+      if (allRetryable && lastError) {
+        return NextResponse.json(
+          {
+            error:
+              "Gemini şu anda yoğun veya geçici olarak kullanılamıyor. Lütfen birkaç saniye sonra tekrar deneyin.",
+            retryable: true,
+          },
+          { status: 503 }
+        );
+      }
+      throw (
+        lastError ??
+        new Error("Gemini boş yanıt döndürdü.")
       );
     }
-
     let extractedWords: ExtractedWord[];
-
     try {
       extractedWords = extractJsonArray(rawText);
     } catch (parseError) {
       console.error(
-        "Gemini JSON parse hatası:",
+        "JSON parse hatası:",
         parseError,
         "Ham yanıt:",
         rawText
       );
-
       return NextResponse.json(
         {
-          error: "Gemini geçerli JSON döndürmedi.",
-          retryable: true,
+          error:
+            "Gemini yanıtı geçerli JSON formatında değil.",
+          raw: rawText,
         },
         { status: 502 }
       );
     }
-
     if (extractedWords.length === 0) {
       return NextResponse.json(
         {
-          success: true,
-          count: 0,
-          words: [],
-          message: "Görselde kelime tespit edilemedi.",
-        },
-        { status: 200 }
-      );
-    }
-
-    /*
-     * Aynı kelime Gemini tarafından tekrar döndürülürse
-     * Supabase'e tekrar eklenmesini engelle.
-     */
-    const uniqueWords = new Map<string, ExtractedWord>();
-
-    for (const item of extractedWords) {
-      const word = item.word?.trim() ?? "";
-
-      if (!word) continue;
-
-      const key = word.toLowerCase();
-
-      if (!uniqueWords.has(key)) {
-        uniqueWords.set(key, {
-          word,
-          preposition: item.preposition?.trim() ?? "",
-          meaning: item.meaning?.trim() ?? "",
-          example_sentence:
-            item.example_sentence?.trim() ?? "",
-        });
-      }
-    }
-
-    const cleanedWords = Array.from(uniqueWords.values());
-
-    if (cleanedWords.length === 0) {
-      return NextResponse.json(
-        {
-          success: true,
-          count: 0,
+          error:
+            "Görselde herhangi bir kelime tespit edilemedi.",
           words: [],
         },
         { status: 200 }
       );
     }
-
-    /*
-     * Supabase'e kaydedilecek satırlar.
-     */
-    const rowsToInsert = cleanedWords.map((item) => ({
+    const rowsToInsert = extractedWords.map((item) => ({
       word: item.word?.trim() ?? "",
-      preposition: item.preposition?.trim() || null,
+      preposition:
+        item.preposition?.trim() || null,
       meaning: item.meaning?.trim() ?? "",
       example_sentence:
         item.example_sentence?.trim() ?? "",
-
       repetitions: 0,
       interval: 1,
       ease_factor: 2.5,
@@ -361,21 +281,20 @@ export async function POST(request: NextRequest) {
       in_learning_phase: false,
       learning_streak: 0,
     }));
-
-    const supabaseAdmin = createServiceRoleClient();
-
-    const { data: insertedRows, error: insertError } =
-      await supabaseAdmin
-        .from("flashcards")
-        .insert(rowsToInsert)
-        .select();
-
+    const supabaseAdmin =
+      createServiceRoleClient();
+    const {
+      data: insertedRows,
+      error: insertError,
+    } = await supabaseAdmin
+      .from("flashcards")
+      .insert(rowsToInsert)
+      .select();
     if (insertError) {
       console.error(
         "Supabase insert hatası:",
         insertError
       );
-
       return NextResponse.json(
         {
           error:
@@ -385,7 +304,6 @@ export async function POST(request: NextRequest) {
         { status: 500 }
       );
     }
-
     return NextResponse.json(
       {
         success: true,
@@ -399,32 +317,26 @@ export async function POST(request: NextRequest) {
       "process-image genel hata:",
       err
     );
-
     const message =
       err instanceof Error
         ? err.message
         : "Bilinmeyen hata";
-
-    const retryable = isRetryableError(err);
-
-    if (retryable) {
+    if (isRetryableError(err)) {
       return NextResponse.json(
         {
           error:
-            "Gemini şu anda yoğun veya işlem zaman aşımına uğradı.",
+            "Gemini şu anda yoğun veya geçici olarak kullanılamıyor. Lütfen birkaç saniye sonra tekrar deneyin.",
           details: message,
           retryable: true,
         },
         { status: 503 }
       );
     }
-
     return NextResponse.json(
       {
         error:
-          "Görsel işlenirken beklenmeyen bir hata oluştu.",
+          "İşlem sırasında beklenmeyen bir hata oluştu.",
         details: message,
-        retryable: false,
       },
       { status: 500 }
     );

@@ -8,16 +8,15 @@ hedef dili İngilizce olan bir kopyasıdır.
 
 ## Özellikler
 
-- 📷 Fotoğraftan (tek veya çoklu, azami 3 sayfa) kelime çıkarma (Gemini)
-- ✍️ Manuel kelime ekleme
-- 🧠 SM-2 aralıklı tekrar + öz-değerlendirmeli (Unuttum/Zorlandım/Hatırladım/Çok kolaydı) çalışma modu
-- 🌱 Sıfırdan Öğren modu + otomatik/manuel SM-2 geçiş sistemi (öğrenme kutusu)
-- 🗂️ Kartlar (puansız gezinme), 📝 Test (puanlı sınav, rekor takibi), 🧩 Eşleştir (süreli oyun)
-- 🔗 Eş anlamlı kelime grupları + grup testi
-- 📈 İlerleme sayfası (streak, günlük hedef, aşama dağılımı, kelime bazlı detay)
-- 🔊 Sesli telaffuz (Web Speech API, en-US)
-- 🌙 Karanlık mod
-- 📱 Mobil uyumlu, tüm veriler Supabase'te (localStorage değil — cihazlar arası senkron)
+- Fotoğraftan kelime çıkarma (Gemini, yoğunsa yerel OCR ile kelime seçme)
+- Manuel kelime ekleme ve JSON yedek
+- SM-2 aralıklı tekrar ve öğrenme kutusu
+- Kart, test, eşleştirme ve eş anlam oyunu
+- İlerleme sayfası; zorlanılan kelimeye basınca anlam ve örnek cümle
+- Alt menü ve ana sayfada değişen motive edici cümleler
+- Sesli telaffuz (en-US) ve karanlık mod
+- İsteğe bağlı öğlen / akşam hatırlatma maili
+- Giriş ekranı yok. Site herkese açık kalır.
 
 ## Kurulum
 
@@ -34,6 +33,12 @@ cp .env.local.example .env.local
 2. SQL Editor'e girip `supabase/full_setup.sql` dosyasının TAMAMINI çalıştırın.
    Bu tek dosya, tüm tabloları (flashcards, word_groups, test_results, match_results,
    daily_activity, app_settings), indeksleri ve RLS politikalarını tek seferde kurar.
+   Veritabanı zaten kurulduysa yalnızca şunu çalıştırın:
+
+   ```sql
+   alter table public.app_settings
+     add column if not exists last_seen_at timestamp with time zone;
+   ```
 3. Project Settings > API sekmesinden:
    - `Project URL` → `NEXT_PUBLIC_SUPABASE_URL`
    - `anon public` key → `NEXT_PUBLIC_SUPABASE_ANON_KEY`
@@ -59,4 +64,4 @@ Sadece şu dosyalar dile özel içerik taşıyordu ve İngilizce'ye uyarlandı:
 - `components/SpeakButton.tsx`, `app/settings/page.tsx` — TTS dili (`en-US`)
 - UI'daki "Fransızca" metinleri → "İngilizce"
 
-Geri kalan her şey (SM-2 algoritması, öğrenme motoru, veritabanı yapısı, tüm sayfalar) **birebir aynı**.
+Geri kalan öğrenme motoru ve tablo yapısı aynıdır. Giriş menüsü eklenmedi.
