@@ -12,11 +12,9 @@ const EXTRACTION_PROMPT = `Bu görsel(ler)deki İngilizce kelimeleri çıkar. Bi
 2. "meaning" alanı: Eğer görselde kelimenin Türkçe anlamı zaten YAZILI olarak veriliyorsa (defter/kitap sayfasında karşısında yazan Türkçe kelime/ifade), onu BİREBİR, HİÇBİR ŞEKİLDE DEĞİŞTİRMEDEN, PARAFRAZ YAPMADAN, EŞ ANLAMLISINI KULLANMADAN aynen yaz — kendi yorumunu veya alternatif çevirini KATMA. Görselde yazılı bir anlam YOKSA (sadece kelimenin kendisi varsa) o zaman doğru ve yaygın Türkçe anlamını sen üret.
 3. "example_sentence" alanı: SADECE ve KESİNLİKLE İngilizce bir örnek cümle yaz. Türkçe veya başka bir dilde örnek cümle YAZMA. Görselde kelimeyle birlikte bir örnek cümle varsa onu birebir kullan; yoksa kelimeye uygun basit, doğru dilbilgisiyle yazılmış yeni bir İngilizce cümle üret.
 4. Aynı kelime birden fazla görselde tekrar geçiyorsa SADECE BİR KEZ ekle (tekrar eden kaydı çıkarma).
-5. "hint_word": Düz çeviri yazma. Kelimeyi hafızada tutan tek bir Türkçe çağrışım cümlesi yaz. Cümlede hem kelimenin sesine benzeyen tanıdık bir Türkçe söz olsun hem de gerçek anlamı geçsin. Örnek: "par intérim" (arasıra) için "Fatih Terim arasıra gelir gider". En fazla 12 kelime.
-6. "synonyms": Bu İngilizce kelimenin 3 yaygın eş anlamlısı. Dizi olarak yaz. Kelimenin kendisini tekrarlama.
-Yanıtı sadece ve strictly JSON array formatında döndür, başka hiçbir açıklama ekleme.
+Yanıtı sadece JSON array olarak döndür. Başka açıklama yazma.
 Format:
-[{"word": "", "preposition": "", "meaning": "", "example_sentence": "", "hint_word": "", "synonyms": ["", "", ""]}]`;
+[{"word": "", "preposition": "", "meaning": "", "example_sentence": ""}]`;
 function extractJsonArray(rawText: string): ExtractedWord[] {
   const cleaned = rawText
     .trim()
@@ -58,31 +56,16 @@ function isRetryableError(err: unknown): boolean {
     message.includes("500") ||
     message.includes("503") ||
     message.includes("RESOURCE_EXHAUSTED") ||
-    message.includes("UNAVAILABLE") ||
-    message.includes("TIMEOUT") ||
-    message.includes("ZAMAN AŞIMI") ||
-    message.includes("ABORTED")
+    message.includes("UNAVAILABLE")
   );
 }
 
-const MODELS = ["gemini-3.5-flash-lite", "gemini-3.8-flash"];
-const CALL_TIMEOUT_MS = 24000;
+const MODELS = ["gemini-3.5-flash-lite", "gemini-2.5-flash", "gemini-3.1-flash-lite"];
 
-async function callModel(
-  apiKey: string,
-  model: string,
-  contents: unknown,
-  withThinking: boolean
-): Promise<string> {
+async function callModel(apiKey: string, model: string, contents: unknown, timeoutMs: number): Promise<string> {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), CALL_TIMEOUT_MS);
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const generationConfig: Record<string, unknown> = {
-      temperature: 0.2,
-      responseMimeType: "application/json",
-    };
-    if (withThinking) generationConfig.thinkingConfig = { thinkingLevel: "minimal" };
-
     const res = await fetch(
       `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,
       {
@@ -91,12 +74,18 @@ async function callModel(
           "Content-Type": "application/json",
           "x-goog-api-key": apiKey,
         },
-        body: JSON.stringify({ contents, generationConfig }),
+        body: JSON.stringify({
+          contents,
+          generationConfig: {
+            temperature: 0.1,
+            responseMimeType: "application/json",
+          },
+        }),
         signal: controller.signal,
       }
     );
     const data = (await res.json().catch(() => ({}))) as {
-      error?: { message?: string; status?: string };
+      error?: { message?: string };
       candidates?: { content?: { parts?: { text?: string }[] } }[];
     };
     if (!res.ok) {
@@ -109,9 +98,7 @@ async function callModel(
     return text;
   } catch (err) {
     if (err instanceof Error && err.name === "AbortError") {
-      const timeout = new Error("Gemini zaman aşımı");
-      (timeout as { status?: number }).status = 503;
-      throw timeout;
+      throw new Error("Bu sayfa yanıt vermeden süre doldu.");
     }
     throw err;
   } finally {
@@ -122,22 +109,16 @@ async function callModel(
 async function extractText(apiKeys: string[], contents: unknown): Promise<string> {
   let lastError: unknown = null;
   for (const apiKey of apiKeys) {
-    for (const model of MODELS) {
+    for (let index = 0; index < MODELS.length; index++) {
+      const model = MODELS[index];
       try {
         console.log(`Gemini ${model} deneniyor`);
-        return await callModel(apiKey, model, contents, true);
+        return await callModel(apiKey, model, contents, index === 0 ? 42000 : 18000);
       } catch (err) {
         lastError = err;
-        const message = err instanceof Error ? err.message : "";
-        const status = (err as { status?: number }).status;
-        if (status === 400 && /thinking/i.test(message)) {
-          try {
-            return await callModel(apiKey, model, contents, false);
-          } catch (retryErr) {
-            lastError = retryErr;
-          }
-        }
-        console.warn(`Gemini ${model} olmadı:`, message || err);
+        const timedOut = err instanceof Error && err.message.includes("süre doldu");
+        console.warn(`Gemini ${model} olmadı:`, err instanceof Error ? err.message : err);
+        if (timedOut) break;
       }
     }
   }

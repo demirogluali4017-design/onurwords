@@ -4,7 +4,7 @@ export interface WordMemory {
 }
 
 const EMPTY: WordMemory = { hint_word: null, synonyms: null };
-const MODELS = ["gemini-3.5-flash-lite", "gemini-3.8-flash"];
+const MODELS = ["gemini-3.5-flash-lite"];
 
 const HINT_RULE = `hint_word: Kelimeyi hafızada tutan kısa bir Türkçe çağrışım cümlesi. Düz çeviri yazma.
 Cümlede iki şey birden olsun:
@@ -57,7 +57,7 @@ async function geminiText(prompt: string): Promise<string | null> {
   for (const apiKey of keys) {
     for (const model of MODELS) {
       const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), 12000);
+      const timer = setTimeout(() => controller.abort(), 8000);
       try {
         const res = await fetch(
           `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,
@@ -69,7 +69,6 @@ async function geminiText(prompt: string): Promise<string | null> {
               generationConfig: {
                 temperature: 0.4,
                 responseMimeType: "application/json",
-                thinkingConfig: { thinkingLevel: "minimal" },
               },
             }),
             signal: controller.signal,
