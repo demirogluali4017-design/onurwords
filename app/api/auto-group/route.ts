@@ -1,11 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
-import { GoogleGenAI } from "@google/genai";
 import { createServiceRoleClient } from "@/lib/supabase";
 
 export const runtime = "nodejs";
-export const maxDuration = 45;
+export const maxDuration = 60;
 
-const BATCH_SIZE = 80; // her istekte işlenecek kelime sayısı (hız + zaman aşımı güvenliği için düşürüldü)
+const BATCH_SIZE = 24;
 const MAX_EXISTING_GROUPS_IN_PROMPT = 200; // prompt'u şişirmemek için
 
 function buildPrompt(batch: WordRow[], existingGroups: GroupRow[]): string {
@@ -51,14 +50,96 @@ function collectApiKeys(): string[] {
   return keys;
 }
 
-function isRetryableError(err: unknown): boolean {
-  const message = err instanceof Error ? err.message : String(err);
-  return (
-    message.includes("429") ||
-    message.includes("503") ||
-    message.includes("RESOURCE_EXHAUSTED") ||
-    message.includes("UNAVAILABLE")
-  );
+const MODELS = ["gemini-3.5-flash-lite", "gemini-3.8-flash"];
+
+function extractDecisions(raw: string): GeminiDecision[] {
+  const cleaned = raw
+    .trim()
+    .replace(/^```json\s*/i, "")
+    .replace(/^```\s*/i, "")
+    .replace(/```\s*$/i, "")
+    .trim();
+  const tryParse = (text: string) => {
+    const parsed = JSON.parse(text);
+    if (!Array.isArray(parsed)) throw new Error("Gemini yanıtı JSON array değil.");
+    return parsed as GeminiDecision[];
+  };
+  try {
+    return tryParse(cleaned);
+  } catch {
+    const start = cleaned.indexOf("[");
+    const end = cleaned.lastIndexOf("]");
+    if (start >= 0 && end > start) return tryParse(cleaned.slice(start, end + 1));
+    throw new Error("Gemini yanıtı okunamadı.");
+  }
+}
+
+async function callModel(apiKey: string, model: string, prompt: string, withThinking: boolean): Promise<string> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 22000);
+  try {
+    const generationConfig: Record<string, unknown> = {
+      temperature: 0.1,
+      responseMimeType: "application/json",
+    };
+    if (withThinking) generationConfig.thinkingConfig = { thinkingLevel: "minimal" };
+
+    const res = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "x-goog-api-key": apiKey },
+        body: JSON.stringify({
+          contents: [{ role: "user", parts: [{ text: prompt }] }],
+          generationConfig,
+        }),
+        signal: controller.signal,
+      }
+    );
+    const data = (await res.json().catch(() => ({}))) as {
+      error?: { message?: string };
+      candidates?: { content?: { parts?: { text?: string }[] } }[];
+    };
+    if (!res.ok) {
+      const error = new Error(data.error?.message || `Gemini ${res.status}`);
+      (error as { status?: number }).status = res.status;
+      throw error;
+    }
+    const text = (data.candidates?.[0]?.content?.parts ?? []).map((part) => part.text ?? "").join("");
+    if (!text.trim()) throw new Error("Gemini boş yanıt döndürdü.");
+    return text;
+  } catch (err) {
+    if (err instanceof Error && err.name === "AbortError") throw new Error("Gemini zaman aşımı");
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function callGemini(prompt: string, apiKeys: string[]): Promise<GeminiDecision[]> {
+  let lastError: unknown = null;
+  for (const apiKey of apiKeys) {
+    for (const model of MODELS) {
+      try {
+        const raw = await callModel(apiKey, model, prompt, true);
+        return extractDecisions(raw);
+      } catch (err) {
+        lastError = err;
+        const message = err instanceof Error ? err.message : "";
+        const status = (err as { status?: number }).status;
+        if (status === 400 && /thinking/i.test(message)) {
+          try {
+            const raw = await callModel(apiKey, model, prompt, false);
+            return extractDecisions(raw);
+          } catch (retryErr) {
+            lastError = retryErr;
+          }
+        }
+        console.warn(`Gruplama ${model} olmadı:`, message || err);
+      }
+    }
+  }
+  throw lastError ?? new Error("Gemini yanıt vermedi.");
 }
 
 interface WordRow {
@@ -77,42 +158,6 @@ interface GeminiDecision {
   group_id?: string;
   group_name?: string;
   word_ids: string[];
-}
-
-async function callGemini(prompt: string, apiKeys: string[]): Promise<GeminiDecision[]> {
-  let lastError: unknown = null;
-
-  for (let keyIndex = 0; keyIndex < apiKeys.length; keyIndex++) {
-    const ai = new GoogleGenAI({ apiKey: apiKeys[keyIndex] });
-    try {
-      const response = await ai.models.generateContent({
-        model: "gemini-3.6-flash",
-        contents: [{ role: "user", parts: [{ text: prompt }] }],
-        config: { responseMimeType: "application/json", temperature: 0.1 },
-      });
-
-      const rawText = response.text;
-      if (!rawText) throw new Error("Gemini boş yanıt döndürdü.");
-
-      const cleaned = rawText
-        .trim()
-        .replace(/^```json\s*/i, "")
-        .replace(/^```\s*/i, "")
-        .replace(/```\s*$/i, "")
-        .trim();
-
-      const parsed = JSON.parse(cleaned);
-      if (!Array.isArray(parsed)) throw new Error("Gemini yanıtı JSON array değil.");
-      return parsed as GeminiDecision[];
-    } catch (err) {
-      lastError = err;
-      const hasNextKey = keyIndex < apiKeys.length - 1;
-      if (isRetryableError(err) && hasNextKey) continue;
-      throw err;
-    }
-  }
-
-  throw lastError ?? new Error("Bilinmeyen hata");
 }
 
 /**

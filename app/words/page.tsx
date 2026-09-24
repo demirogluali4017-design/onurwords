@@ -294,7 +294,7 @@ export default function WordsPage() {
     }
 
     const confirmed = confirm(
-      `${ungroupedCount} grupsuz kelime Gemini ile parça parça analiz edilecek. Her parça ~80 kelime, günlük kotanı etkiler. Devam edilsin mi?`
+      `${ungroupedCount} grupsuz kelime, 24'er kelimelik parçalar halinde eş anlamlı gruplara ayrılacak. Devam edilsin mi?`
     );
     if (!confirmed) return;
 
@@ -311,7 +311,7 @@ export default function WordsPage() {
         const data = await res.json();
 
         if (!res.ok) {
-          allErrors.push(data.error || "Bilinmeyen hata");
+          allErrors.push(data.details || data.error || "Bilinmeyen hata");
           break;
         }
 
