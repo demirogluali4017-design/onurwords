@@ -14,9 +14,9 @@ hedef dili İngilizce olan bir kopyasıdır.
 - Kart, test, eşleştirme ve eş anlam oyunu
 - İlerleme sayfası; zorlanılan kelimeye basınca anlam ve örnek cümle
 - Alt menü ve ana sayfada değişen motive edici cümleler
+- Her yeni kelimeye Türkçe bir ipucu ve birkaç İngilizce eş anlam eklenir
 - Sesli telaffuz (en-US) ve karanlık mod
-- İsteğe bağlı öğlen / akşam hatırlatma maili
-- Giriş ekranı yok. Site herkese açık kalır.
+- Giriş ekranı yok. Site herkese açık kalır. Hatırlatma maili yok.
 
 ## Kurulum
 
@@ -36,8 +36,8 @@ cp .env.local.example .env.local
    Veritabanı zaten kurulduysa yalnızca şunu çalıştırın:
 
    ```sql
-   alter table public.app_settings
-     add column if not exists last_seen_at timestamp with time zone;
+   alter table public.flashcards add column if not exists hint_word text;
+   alter table public.flashcards add column if not exists synonyms text;
    ```
 3. Project Settings > API sekmesinden:
    - `Project URL` → `NEXT_PUBLIC_SUPABASE_URL`

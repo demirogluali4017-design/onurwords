@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createServiceRoleClient } from "@/lib/supabase";
+import { suggestMemory } from "@/lib/wordMemory";
 
 export const runtime = "nodejs";
 
@@ -25,13 +26,16 @@ export async function POST(request: NextRequest) {
     }
 
     const supabaseAdmin = createServiceRoleClient();
-    const { data, error } = await supabaseAdmin
+    const memory = await suggestMemory(word, meaning);
+    let { data, error } = await supabaseAdmin
       .from("flashcards")
       .insert({
         word,
         preposition: preposition || null,
         meaning,
         example_sentence: example_sentence || "",
+        hint_word: memory.hint_word,
+        synonyms: memory.synonyms,
         repetitions: 0,
         interval: 1,
         ease_factor: 2.5,
@@ -41,6 +45,27 @@ export async function POST(request: NextRequest) {
       })
       .select()
       .single();
+
+    if (error && /hint_word|synonyms|column/i.test(error.message)) {
+      const retry = await supabaseAdmin
+        .from("flashcards")
+        .insert({
+          word,
+          preposition: preposition || null,
+          meaning,
+          example_sentence: example_sentence || "",
+          repetitions: 0,
+          interval: 1,
+          ease_factor: 2.5,
+          next_review_date: new Date().toISOString(),
+          in_learning_phase: false,
+          learning_streak: 0,
+        })
+        .select()
+        .single();
+      data = retry.data;
+      error = retry.error;
+    }
 
     if (error) {
       console.error("add-word insert hatası:", error);

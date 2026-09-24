@@ -692,7 +692,17 @@ export default function WordsPage() {
                         </>
                       ) : (
                         <>
-                          <td className="px-4 py-3 font-semibold text-slate-800 dark:text-slate-100">{w.word}</td>
+                          <td className="px-4 py-3 font-semibold text-slate-800 dark:text-slate-100">
+                            <div>{w.word}</div>
+                            {w.hint_word && (
+                              <div className="mt-1 text-xs font-medium text-amber-700 dark:text-amber-300">
+                                İpucu: {w.hint_word}
+                              </div>
+                            )}
+                            {w.synonyms && (
+                              <div className="mt-0.5 text-xs font-normal text-slate-400">{w.synonyms}</div>
+                            )}
+                          </td>
                           <td className="px-4 py-3 text-slate-500 dark:text-slate-400">{w.preposition || "—"}</td>
                           <td className="px-4 py-3 text-slate-700 dark:text-slate-200">{w.meaning}</td>
                           <td className="px-4 py-3 text-slate-500 dark:text-slate-400 italic max-w-xs truncate">

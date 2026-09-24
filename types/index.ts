@@ -20,6 +20,8 @@ export interface Flashcard {
   // --- SM-2 Geçiş Sistemi (migration_6_learning_phase.sql) ---
   in_learning_phase?: boolean;
   learning_streak?: number;
+  hint_word?: string | null;
+  synonyms?: string | null;
   // --- Eş Anlamlı Gruplar (migration_7_word_groups.sql) ---
   group_id?: string | null;
 }
@@ -36,6 +38,8 @@ export interface ExtractedWord {
   preposition: string;
   meaning: string;
   example_sentence: string;
+  hint_word?: string;
+  synonyms?: string | string[];
 }
 
 // --- SM-2 ---

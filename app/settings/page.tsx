@@ -19,8 +19,6 @@ export default function SettingsPage() {
   const [savingGoals, setSavingGoals] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [exportNote, setExportNote] = useState<string | null>(null);
-  const [testingMail, setTestingMail] = useState(false);
-  const [mailNote, setMailNote] = useState<string | null>(null);
 
   useEffect(() => {
     const s = getTTSSettings();
@@ -99,24 +97,6 @@ export default function SettingsPage() {
     setSavingGoals(false);
   }
 
-  async function sendTestMail() {
-    setTestingMail(true);
-    setMailNote(null);
-    try {
-      const res = await fetch("/api/send-reminder", { method: "POST" });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) {
-        setMailNote(data.error || "Deneme maili gidemedi.");
-        return;
-      }
-      setMailNote(`Gönderildi: ${data.to}. Gelen kutusuna ve spam klasörüne bak.`);
-    } catch {
-      setMailNote("Deneme maili gidemedi.");
-    } finally {
-      setTestingMail(false);
-    }
-  }
-
   function updateRate(value: number) {
     setRate(value);
     setTTSSettings(value, pitch);
@@ -160,21 +140,6 @@ export default function SettingsPage() {
             {exporting ? "Hazırlanıyor..." : "Yedek indir"}
           </button>
           {exportNote && <p className="text-xs text-slate-400 dark:text-slate-500">{exportNote}</p>}
-        </section>
-
-        <section className="rounded-2xl bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 shadow-sm p-6 space-y-4">
-          <h2 className="font-semibold text-slate-800 dark:text-slate-100">Hatırlatma</h2>
-          <p className="text-sm text-slate-500 dark:text-slate-400">
-            Öğlen mailinin aynısını şimdi bir kez gönderir.
-          </p>
-          <button
-            onClick={sendTestMail}
-            disabled={testingMail}
-            className="w-full rounded-lg bg-indigo-600 text-white font-medium py-2.5 hover:bg-indigo-700 transition-colors text-sm disabled:opacity-60"
-          >
-            {testingMail ? "Gönderiliyor..." : "Deneme maili gönder"}
-          </button>
-          {mailNote && <p className="text-xs text-slate-400 dark:text-slate-500">{mailNote}</p>}
         </section>
 
         {/* Görünüm */}

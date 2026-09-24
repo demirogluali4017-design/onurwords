@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { GoogleGenAI } from "@google/genai";
 import { createServiceRoleClient } from "@/lib/supabase";
 import { ExtractedWord } from "@/types";
+import { normalizeHint, normalizeSynonyms } from "@/lib/wordMemory";
 export const runtime = "nodejs";
 export const maxDuration = 60;
 const EXTRACTION_PROMPT = `Bu görsel(ler)deki İngilizce kelimeleri çıkar. Birden fazla görsel verildiyse HEPSİNİ işle ve TEK bir birleşik JSON array olarak döndür (görseller ayrı sayfalar olabilir, sırayla işle). Kurallara KESİNLİKLE uy:
@@ -12,9 +13,11 @@ const EXTRACTION_PROMPT = `Bu görsel(ler)deki İngilizce kelimeleri çıkar. Bi
 2. "meaning" alanı: Eğer görselde kelimenin Türkçe anlamı zaten YAZILI olarak veriliyorsa (defter/kitap sayfasında karşısında yazan Türkçe kelime/ifade), onu BİREBİR, HİÇBİR ŞEKİLDE DEĞİŞTİRMEDEN, PARAFRAZ YAPMADAN, EŞ ANLAMLISINI KULLANMADAN aynen yaz — kendi yorumunu veya alternatif çevirini KATMA. Görselde yazılı bir anlam YOKSA (sadece kelimenin kendisi varsa) o zaman doğru ve yaygın Türkçe anlamını sen üret.
 3. "example_sentence" alanı: SADECE ve KESİNLİKLE İngilizce bir örnek cümle yaz. Türkçe veya başka bir dilde örnek cümle YAZMA. Görselde kelimeyle birlikte bir örnek cümle varsa onu birebir kullan; yoksa kelimeye uygun basit, doğru dilbilgisiyle yazılmış yeni bir İngilizce cümle üret.
 4. Aynı kelime birden fazla görselde tekrar geçiyorsa SADECE BİR KEZ ekle (tekrar eden kaydı çıkarma).
+5. "hint_word": Kelimeyi akılda tutan TEK Türkçe ipucu kelime. Anlamın kendisi olmasın. Sesi veya çağrışımı İngilizce kelimeye bağlansın. Cümle yazma.
+6. "synonyms": Bu İngilizce kelimenin 3 yaygın eş anlamlısı. Dizi olarak yaz. Kelimenin kendisini tekrarlama.
 Yanıtı sadece ve strictly JSON array formatında döndür, başka hiçbir açıklama ekleme.
 Format:
-[{"word": "", "preposition": "", "meaning": "", "example_sentence": ""}]`;
+[{"word": "", "preposition": "", "meaning": "", "example_sentence": "", "hint_word": "", "synonyms": ["", "", ""]}]`;
 function extractJsonArray(rawText: string): ExtractedWord[] {
   const cleaned = rawText
     .trim()
@@ -279,8 +282,9 @@ export async function POST(request: NextRequest) {
       preposition:
         item.preposition?.trim() || null,
       meaning: item.meaning?.trim() ?? "",
-      example_sentence:
-        item.example_sentence?.trim() ?? "",
+      example_sentence: item.example_sentence?.trim() ?? "",
+      hint_word: normalizeHint(item.hint_word, item.meaning),
+      synonyms: normalizeSynonyms(item.synonyms, item.word),
       repetitions: 0,
       interval: 1,
       ease_factor: 2.5,
@@ -288,15 +292,17 @@ export async function POST(request: NextRequest) {
       in_learning_phase: false,
       learning_streak: 0,
     }));
-    const supabaseAdmin =
-      createServiceRoleClient();
-    const {
-      data: insertedRows,
-      error: insertError,
-    } = await supabaseAdmin
+    const supabaseAdmin = createServiceRoleClient();
+    let { data: insertedRows, error: insertError } = await supabaseAdmin
       .from("flashcards")
       .insert(rowsToInsert)
       .select();
+    if (insertError && /hint_word|synonyms|column/i.test(insertError.message)) {
+      const plain = rowsToInsert.map(({ hint_word: _hint, synonyms: _synonyms, ...rest }) => rest);
+      const retry = await supabaseAdmin.from("flashcards").insert(plain).select();
+      insertedRows = retry.data;
+      insertError = retry.error;
+    }
     if (insertError) {
       console.error(
         "Supabase insert hatası:",

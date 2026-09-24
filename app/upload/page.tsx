@@ -223,6 +223,8 @@ function PhotoUploadPanel() {
                   <th className="px-4 py-3 font-medium">Preposition</th>
                   <th className="px-4 py-3 font-medium">Anlam</th>
                   <th className="px-4 py-3 font-medium">Örnek Cümle</th>
+                  <th className="px-4 py-3 font-medium">İpucu</th>
+                  <th className="px-4 py-3 font-medium">Eş anlam</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100 dark:divide-slate-700">
@@ -232,6 +234,8 @@ function PhotoUploadPanel() {
                     <td className="px-4 py-3 text-slate-500 dark:text-slate-400">{w.preposition ?? "—"}</td>
                     <td className="px-4 py-3 text-slate-700 dark:text-slate-200">{w.meaning}</td>
                     <td className="px-4 py-3 text-slate-500 dark:text-slate-400 italic">{w.example_sentence}</td>
+                    <td className="px-4 py-3 text-amber-700">{w.hint_word || "—"}</td>
+                    <td className="px-4 py-3 text-slate-500 dark:text-slate-400">{w.synonyms || "—"}</td>
                   </tr>
                 ))}
               </tbody>

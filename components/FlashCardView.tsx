@@ -11,7 +11,7 @@ interface FlashCardViewProps {
 
 export default function FlashCardView({ card, isFlipped, onFlip }: FlashCardViewProps) {
   return (
-    <div className="[perspective:1500px] w-full max-w-xl mx-auto h-80 select-none">
+    <div className="[perspective:1500px] w-full max-w-xl mx-auto h-96 select-none">
       <div
         onClick={onFlip}
         className={`relative w-full h-full cursor-pointer transition-transform duration-500 [transform-style:preserve-3d] ${
@@ -32,6 +32,9 @@ export default function FlashCardView({ card, isFlipped, onFlip }: FlashCardView
             </h2>
             <SpeakButton text={card.word} />
           </div>
+          {card.hint_word && (
+            <p className="text-sm text-amber-700 dark:text-amber-300">İpucu: {card.hint_word}</p>
+          )}
           <p className="text-sm text-slate-400 dark:text-slate-500 mt-4">Cevabı görmek için karta tıkla</p>
         </div>
 
@@ -45,6 +48,9 @@ export default function FlashCardView({ card, isFlipped, onFlip }: FlashCardView
             <p className="text-indigo-100 italic mt-2 text-lg">
               &ldquo;{card.example_sentence}&rdquo;
             </p>
+          )}
+          {card.synonyms && (
+            <p className="text-sm text-indigo-100">Eş anlam: {card.synonyms}</p>
           )}
         </div>
       </div>

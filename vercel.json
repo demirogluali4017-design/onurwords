@@ -1,12 +1,1 @@
-{
-  "crons": [
-    {
-      "path": "/api/send-reminder?when=noon",
-      "schedule": "0 9 * * *"
-    },
-    {
-      "path": "/api/send-reminder?when=evening",
-      "schedule": "0 13 * * *"
-    }
-  ]
-}
+{}
