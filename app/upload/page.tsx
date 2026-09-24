@@ -86,7 +86,7 @@ async function sendPage(
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
-        lastMessage = String(data.error || lastMessage);
+        lastMessage = String(data.details || data.error || lastMessage);
         const busy = res.status === 503 || res.status === 429 || data.retryable === true;
         if (busy && attempt === 0) {
           onStatus("yoğun, kısa ara veriliyor");

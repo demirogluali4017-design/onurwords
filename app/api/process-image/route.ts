@@ -22,11 +22,19 @@ function extractJsonArray(rawText: string): ExtractedWord[] {
     .replace(/^```\s*/i, "")
     .replace(/```\s*$/i, "")
     .trim();
-  const parsed = JSON.parse(cleaned);
-  if (!Array.isArray(parsed)) {
-    throw new Error("Gemini yanıtı bir JSON array değil.");
+  const read = (text: string) => {
+    const parsed = JSON.parse(text);
+    if (!Array.isArray(parsed)) throw new Error("Gemini yanıtı bir JSON array değil.");
+    return parsed as ExtractedWord[];
+  };
+  try {
+    return read(cleaned);
+  } catch {
+    const start = cleaned.indexOf("[");
+    const end = cleaned.lastIndexOf("]");
+    if (start >= 0 && end > start) return read(cleaned.slice(start, end + 1));
+    throw new Error("Gemini yanıtı okunamadı.");
   }
-  return parsed as ExtractedWord[];
 }
 function collectApiKeys(): string[] {
   const keys: string[] = [];
@@ -60,11 +68,19 @@ function isRetryableError(err: unknown): boolean {
   );
 }
 
-const MODELS = ["gemini-3.5-flash-lite", "gemini-2.5-flash", "gemini-3.1-flash-lite"];
+const MODELS = ["gemini-3.5-flash-lite", "gemini-2.5-flash", "gemini-3.6-flash"];
 
-async function callModel(apiKey: string, model: string, contents: unknown, timeoutMs: number): Promise<string> {
+async function callModel(
+  apiKey: string,
+  model: string,
+  contents: unknown,
+  timeoutMs: number,
+  parentSignal: AbortSignal
+): Promise<string> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
+  const onParent = () => controller.abort();
+  parentSignal.addEventListener("abort", onParent);
   try {
     const res = await fetch(
       `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,
@@ -97,32 +113,35 @@ async function callModel(apiKey: string, model: string, contents: unknown, timeo
     if (!text.trim()) throw new Error("Gemini boş yanıt döndürdü.");
     return text;
   } catch (err) {
-    if (err instanceof Error && err.name === "AbortError") {
-      throw new Error("Bu sayfa yanıt vermeden süre doldu.");
-    }
+    if (parentSignal.aborted) throw new Error("iptal");
+    if (err instanceof Error && err.name === "AbortError") throw new Error("süre doldu");
     throw err;
   } finally {
     clearTimeout(timer);
+    parentSignal.removeEventListener("abort", onParent);
   }
 }
 
 async function extractText(apiKeys: string[], contents: unknown): Promise<string> {
-  let lastError: unknown = null;
-  for (const apiKey of apiKeys) {
-    for (let index = 0; index < MODELS.length; index++) {
-      const model = MODELS[index];
-      try {
-        console.log(`Gemini ${model} deneniyor`);
-        return await callModel(apiKey, model, contents, index === 0 ? 42000 : 18000);
-      } catch (err) {
-        lastError = err;
-        const timedOut = err instanceof Error && err.message.includes("süre doldu");
-        console.warn(`Gemini ${model} olmadı:`, err instanceof Error ? err.message : err);
-        if (timedOut) break;
-      }
+  const apiKey = apiKeys[0];
+  const parent = new AbortController();
+  const errors: string[] = [];
+  const jobs = MODELS.map(async (model) => {
+    try {
+      const text = await callModel(apiKey, model, contents, 50000, parent.signal);
+      parent.abort();
+      return text;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      if (message !== "iptal") errors.push(`${model}: ${message}`);
+      throw err;
     }
+  });
+  try {
+    return await Promise.any(jobs);
+  } catch {
+    throw new Error(errors.join(" | ") || "Gemini yanıt vermedi.");
   }
-  throw lastError ?? new Error("Gemini yanıt vermedi.");
 }
 export async function POST(request: NextRequest) {
   try {
@@ -203,19 +222,14 @@ export async function POST(request: NextRequest) {
       console.error("Gemini çıkarma başarısız:", err);
     }
     if (!rawText) {
-      if (lastError && isRetryableError(lastError)) {
-        return NextResponse.json(
-          {
-            error:
-              "Gemini şu anda yoğun veya geçici olarak kullanılamıyor. Lütfen birkaç saniye sonra tekrar deneyin.",
-            retryable: true,
-          },
-          { status: 503 }
-        );
-      }
-      throw (
-        lastError ??
-        new Error("Gemini boş yanıt döndürdü.")
+      const message = lastError instanceof Error ? lastError.message : "Gemini yanıt vermedi.";
+      return NextResponse.json(
+        {
+          error: message,
+          details: message,
+          retryable: Boolean(lastError && isRetryableError(lastError)),
+        },
+        { status: 502 }
       );
     }
     let extractedWords: ExtractedWord[];
@@ -332,8 +346,7 @@ export async function POST(request: NextRequest) {
     }
     return NextResponse.json(
       {
-        error:
-          "İşlem sırasında beklenmeyen bir hata oluştu.",
+        error: message,
         details: message,
       },
       { status: 500 }
