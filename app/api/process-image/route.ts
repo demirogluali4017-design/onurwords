@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createServiceRoleClient } from "@/lib/supabase";
 import { ExtractedWord } from "@/types";
-import { normalizeHint, normalizeSynonyms } from "@/lib/wordMemory";
+import { normalizeHint, normalizeSynonyms, suggestMemories } from "@/lib/wordMemory";
 export const runtime = "nodejs";
 export const maxDuration = 60;
 const EXTRACTION_PROMPT = `Bu görsel(ler)deki İngilizce kelimeleri çıkar. Birden fazla görsel verildiyse HEPSİNİ işle ve TEK bir birleşik JSON array olarak döndür (görseller ayrı sayfalar olabilir, sırayla işle). Kurallara KESİNLİKLE uy:
@@ -281,12 +281,26 @@ export async function POST(request: NextRequest) {
       in_learning_phase: false,
       learning_streak: 0,
     }));
+    try {
+      const memories = await suggestMemories(
+        rowsToInsert.map((row) => ({ word: row.word, meaning: row.meaning }))
+      );
+      memories.forEach((memory, index) => {
+        if (memory.hint_word) rowsToInsert[index].hint_word = memory.hint_word;
+        if (memory.synonyms) rowsToInsert[index].synonyms = memory.synonyms;
+      });
+    } catch (err) {
+      console.warn("İpucu turu atlandı:", err);
+    }
     const supabaseAdmin = createServiceRoleClient();
     let { data: insertedRows, error: insertError } = await supabaseAdmin
       .from("flashcards")
       .insert(rowsToInsert)
       .select();
+    let memoryWarning: string | null = null;
     if (insertError && /hint_word|synonyms|column/i.test(insertError.message)) {
+      memoryWarning =
+        "Kelimeler kaydedildi ama ipucu sütunu yok. Supabase SQL editöründe hint_word ve synonyms sütunlarını ekle, sonra yeni kelime yükle.";
       const plain = rowsToInsert.map(({ hint_word: _hint, synonyms: _synonyms, ...rest }) => rest);
       const retry = await supabaseAdmin.from("flashcards").insert(plain).select();
       insertedRows = retry.data;
@@ -311,6 +325,7 @@ export async function POST(request: NextRequest) {
         success: true,
         count: insertedRows?.length ?? 0,
         words: insertedRows,
+        warning: memoryWarning,
       },
       { status: 201 }
     );

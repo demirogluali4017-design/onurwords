@@ -67,7 +67,10 @@ function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-async function sendPage(file: File, onStatus: (label: string) => void): Promise<Flashcard[]> {
+async function sendPage(
+  file: File,
+  onStatus: (label: string) => void
+): Promise<{ words: Flashcard[]; warning: string | null }> {
   let lastMessage = "Gemini şu anda yoğun. Biraz sonra aynı sayfayı tekrar dene.";
 
   for (let attempt = 0; attempt < 2; attempt++) {
@@ -92,7 +95,7 @@ async function sendPage(file: File, onStatus: (label: string) => void): Promise<
         }
         throw new Error(lastMessage);
       }
-      return (data.words ?? []) as Flashcard[];
+      return { words: (data.words ?? []) as Flashcard[], warning: data.warning ?? null };
     } catch (err) {
       const aborted = err instanceof DOMException && err.name === "AbortError";
       if (aborted) lastMessage = "Bu sayfa çok uzun sürdü. Gemini yanıt vermedi.";
@@ -133,10 +136,11 @@ function PhotoUploadPanel() {
 
       for (let index = 0; index < compressedFiles.length; index++) {
         setProgress(`Sayfa ${index + 1}/${compressedFiles.length} işleniyor`);
-        const pageWords = await sendPage(compressedFiles[index], (label) => {
+        const page = await sendPage(compressedFiles[index], (label) => {
           setProgress(`Sayfa ${index + 1}/${compressedFiles.length}: ${label}`);
         });
-        saved.push(...pageWords);
+        saved.push(...page.words);
+        if (page.warning) setNotice(page.warning);
         setSavedWords([...saved]);
       }
 
