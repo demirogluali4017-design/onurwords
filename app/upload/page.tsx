@@ -3,9 +3,7 @@
 import { useState } from "react";
 import Link from "next/link";
 import MultiFileUploadZone from "@/components/MultiFileUploadZone";
-import OcrWordPicker from "@/components/OcrWordPicker";
 import { compressImages } from "@/lib/imageCompression";
-import { recognizeImages } from "@/lib/ocr";
 import { Flashcard } from "@/types";
 
 type ProcessState = "idle" | "processing" | "success" | "error";
@@ -65,100 +63,97 @@ function TabButton({
 // ============================================================
 // SEKME 1: Fotoğraf(lar)ı yükle → Gemini ile çıkar (azami 3 sayfa)
 // ============================================================
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function sendPage(file: File, onStatus: (label: string) => void): Promise<Flashcard[]> {
+  let lastMessage = "Gemini şu anda yoğun. Biraz sonra aynı sayfayı tekrar dene.";
+
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => controller.abort(), 28000);
+    try {
+      const formData = new FormData();
+      formData.append("images", file);
+      const res = await fetch("/api/process-image", {
+        method: "POST",
+        body: formData,
+        signal: controller.signal,
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        lastMessage = String(data.error || lastMessage);
+        const busy = res.status === 503 || res.status === 429 || data.retryable === true;
+        if (busy && attempt === 0) {
+          onStatus("yoğun, kısa ara veriliyor");
+          await sleep(1200);
+          continue;
+        }
+        throw new Error(lastMessage);
+      }
+      return (data.words ?? []) as Flashcard[];
+    } catch (err) {
+      const aborted = err instanceof DOMException && err.name === "AbortError";
+      if (aborted) lastMessage = "Bu sayfa çok uzun sürdü. Gemini yanıt vermedi.";
+      else if (err instanceof Error && err.message) lastMessage = err.message;
+      if (attempt === 0) {
+        onStatus("yeniden deneniyor");
+        await sleep(1200);
+        continue;
+      }
+      throw new Error(lastMessage);
+    } finally {
+      window.clearTimeout(timer);
+    }
+  }
+
+  throw new Error(lastMessage);
+}
+
 function PhotoUploadPanel() {
   const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
   const [state, setState] = useState<ProcessState>("idle");
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [progress, setProgress] = useState<string | null>(null);
   const [savedWords, setSavedWords] = useState<Flashcard[]>([]);
-  const [ocrPages, setOcrPages] = useState<
-    {
-      url: string;
-      label: string;
-      tokens: Awaited<ReturnType<typeof recognizeImages>>[number]["tokens"];
-      pairs: Awaited<ReturnType<typeof recognizeImages>>[number]["pairs"];
-      width: number;
-      height: number;
-    }[] | null
-  >(null);
-  const [ocrProgress, setOcrProgress] = useState<string | null>(null);
-  const [ocrError, setOcrError] = useState<string | null>(null);
-
-  function clearOcr(pages = ocrPages) {
-    pages?.forEach((page) => URL.revokeObjectURL(page.url));
-    setOcrPages(null);
-    setOcrProgress(null);
-    setOcrError(null);
-  }
-
-  async function handleOcr() {
-    if (selectedFiles.length === 0 || ocrProgress) return;
-    clearOcr();
-    setOcrError(null);
-    try {
-      setOcrProgress("Fotoğraflar hazırlanıyor…");
-      const compressed = await compressImages(selectedFiles);
-      const recognized = await recognizeImages(compressed, (index, progress) => {
-        setOcrProgress(
-          `Sayfa ${index + 1}/${compressed.length} okunuyor… %${Math.round(progress * 100)}`
-        );
-      });
-      setOcrPages(
-        recognized.map((result, index) => ({
-          url: URL.createObjectURL(compressed[index]),
-          label: `Sayfa ${index + 1}`,
-          tokens: result.tokens,
-          pairs: result.pairs,
-          width: result.width,
-          height: result.height,
-        }))
-      );
-      setOcrProgress(null);
-    } catch (err) {
-      setOcrProgress(null);
-      setOcrError(err instanceof Error ? err.message : "Fotoğraf okunamadı.");
-    }
-  }
 
   async function handleProcess() {
-    if (selectedFiles.length === 0) return;
+    if (selectedFiles.length === 0 || state === "processing") return;
 
     setState("processing");
     setErrorMessage(null);
+    setNotice(null);
+    setSavedWords([]);
 
+    const saved: Flashcard[] = [];
     try {
       const compressedFiles = await compressImages(selectedFiles);
 
-      const formData = new FormData();
-      compressedFiles.forEach((file) => formData.append("images", file));
-
-      const res = await fetch("/api/process-image", {
-        method: "POST",
-        body: formData,
-      });
-
-      const data = await res.json();
-
-      if (!res.ok) {
-        const message = String(data.error || "");
-        const busy =
-          res.status === 503 ||
-          res.status === 429 ||
-          data.retryable === true ||
-          /yoğun|kullanılamıyor|unavailable/i.test(message);
-        if (busy) {
-          setState("idle");
-          setErrorMessage(message || "Gemini şu anda yoğun.");
-          await handleOcr();
-          return;
-        }
-        throw new Error(message || "Bilinmeyen bir hata oluştu.");
+      for (let index = 0; index < compressedFiles.length; index++) {
+        setProgress(`Sayfa ${index + 1}/${compressedFiles.length} işleniyor`);
+        const pageWords = await sendPage(compressedFiles[index], (label) => {
+          setProgress(`Sayfa ${index + 1}/${compressedFiles.length}: ${label}`);
+        });
+        saved.push(...pageWords);
+        setSavedWords([...saved]);
       }
 
-      setSavedWords(data.words ?? []);
+      setSavedWords(saved);
       setState("success");
     } catch (err) {
-      setErrorMessage(err instanceof Error ? err.message : "Beklenmeyen hata.");
-      setState("error");
+      const message = err instanceof Error ? err.message : "Beklenmeyen hata.";
+      if (saved.length > 0) {
+        setSavedWords(saved);
+        setNotice(message);
+        setState("success");
+      } else {
+        setErrorMessage(message);
+        setState("error");
+      }
+    } finally {
+      setProgress(null);
     }
   }
 
@@ -167,6 +162,8 @@ function PhotoUploadPanel() {
     setSavedWords([]);
     setState("idle");
     setErrorMessage(null);
+    setNotice(null);
+    setProgress(null);
   }
 
   return (
@@ -176,54 +173,27 @@ function PhotoUploadPanel() {
           setSelectedFiles(files);
           setState("idle");
           setSavedWords([]);
-          clearOcr();
+          setNotice(null);
         }}
-        disabled={state === "processing" || Boolean(ocrProgress)}
+        disabled={state === "processing"}
       />
 
-      {selectedFiles.length > 0 && state !== "success" && !ocrPages && (
-        <div className="space-y-2">
-          <button
-            onClick={handleProcess}
-            disabled={state === "processing" || Boolean(ocrProgress)}
-            className="w-full rounded-xl bg-indigo-600 py-3 font-medium text-white transition-colors hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-60"
-          >
-            {state === "processing" ? (
-              <span className="flex items-center justify-center gap-2">
-                <span className="h-4 w-4 animate-spin rounded-full border-2 border-white/40 border-t-white" />
-                Gemini {selectedFiles.length} sayfayı analiz ediyor...
-              </span>
-            ) : (
-              `${selectedFiles.length} Sayfayı İşle ve Kelimeleri Çıkar`
-            )}
-          </button>
-          <button
-            onClick={handleOcr}
-            disabled={state === "processing" || Boolean(ocrProgress)}
-            className="flex w-full items-center justify-center gap-2 rounded-xl border border-slate-300 bg-white py-3 font-medium text-slate-700 transition-colors hover:border-indigo-400 disabled:cursor-not-allowed disabled:opacity-60 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-200"
-          >
-            {ocrProgress ? (
-              <>
-                <span className="h-4 w-4 animate-spin rounded-full border-2 border-indigo-300 border-t-indigo-700" />
-                {ocrProgress}
-              </>
-            ) : (
-              "OCR ile kelime seç"
-            )}
-          </button>
-          <p className="text-xs text-slate-400">
-            Önce Gemini dener. Yoğunsa kelimeleri buradan seçersin.
-          </p>
-        </div>
+      {selectedFiles.length > 0 && state !== "success" && (
+        <button
+          onClick={handleProcess}
+          disabled={state === "processing"}
+          className="w-full rounded-xl bg-indigo-600 py-3 font-medium text-white transition-colors hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-60"
+        >
+          {state === "processing" ? (
+            <span className="flex items-center justify-center gap-2">
+              <span className="h-4 w-4 animate-spin rounded-full border-2 border-white/40 border-t-white" />
+              {progress ?? "Hazırlanıyor..."}
+            </span>
+          ) : (
+            `${selectedFiles.length} Sayfayı İşle ve Kelimeleri Çıkar`
+          )}
+        </button>
       )}
-
-      {ocrError && (
-        <div className="rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-700 dark:bg-red-950">
-          ⚠️ {ocrError}
-        </div>
-      )}
-
-      {ocrPages && <OcrWordPicker pages={ocrPages} onClose={() => clearOcr()} />}
 
       {state === "error" && errorMessage && (
         <div className="rounded-xl bg-red-50 dark:bg-red-950 border border-red-200 text-red-700 p-4 text-sm">
@@ -233,6 +203,11 @@ function PhotoUploadPanel() {
 
       {state === "success" && (
         <div className="space-y-4">
+          {notice && (
+            <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800 dark:bg-amber-950">
+              {notice} Kaydedilen {savedWords.length} kelime duruyor.
+            </div>
+          )}
           <div className="rounded-xl bg-green-50 dark:bg-green-950 border border-green-200 text-green-700 p-4 text-sm flex items-center justify-between">
             <span>✅ {savedWords.length} kelime başarıyla kaydedildi.</span>
             <button onClick={handleReset} className="text-green-800 font-medium hover:underline">

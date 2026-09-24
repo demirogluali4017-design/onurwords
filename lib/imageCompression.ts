@@ -10,12 +10,12 @@
  * makul bir boyuta indirir. Kelime okunabilirliği bozulmaz — sadece
  * gereksiz yüksek çözünürlük ve dosya boyutu azaltılır.
  */
-const MAX_DIMENSION = 1600; // px, en uzun kenar
-const JPEG_QUALITY = 0.82;
+const MAX_DIMENSION = 1280;
+const JPEG_QUALITY = 0.72;
 
 export async function compressImage(file: File): Promise<File> {
   // Zaten küçükse (örn. galeriden gelen optimize edilmiş görsel) dokunma
-  if (file.size <= 1.2 * 1024 * 1024) {
+  if (file.size <= 700 * 1024 && file.type === "image/jpeg") {
     return file;
   }
 

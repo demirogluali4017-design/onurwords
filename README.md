@@ -8,7 +8,7 @@ hedef dili İngilizce olan bir kopyasıdır.
 
 ## Özellikler
 
-- Fotoğraftan kelime çıkarma (Gemini, yoğunsa yerel OCR ile kelime seçme)
+- Fotoğraftan kelime çıkarma (Gemini, sayfa sayfa, takılırsa keser)
 - Manuel kelime ekleme ve JSON yedek
 - SM-2 aralıklı tekrar ve öğrenme kutusu
 - Kart, test, eşleştirme ve eş anlam oyunu

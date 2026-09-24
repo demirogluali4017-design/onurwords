@@ -57,47 +57,58 @@ function isRetryableError(err: unknown): boolean {
     message.includes("503") ||
     message.includes("RESOURCE_EXHAUSTED") ||
     message.includes("UNAVAILABLE") ||
-    message.includes("SERVICE_UNAVAILABLE")
+    message.includes("TIMEOUT") ||
+    message.includes("ZAMAN AŞIMI") ||
+    message.includes("ABORTED")
   );
 }
-function getRetryDelay(attempt: number): number {
-  const baseDelay = 1000 * Math.pow(2, attempt);
-  const jitter = Math.floor(Math.random() * 500);
-  return baseDelay + jitter;
+function getRetryDelay(): number {
+  return 800 + Math.floor(Math.random() * 400);
 }
-async function generateWithRetry(
-  ai: GoogleGenAI,
-  contents: any,
-  maxRetries = 3
-) {
+
+const CALL_TIMEOUT_MS = 20000;
+
+function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      const error = new Error("Gemini zaman aşımı");
+      (error as { status?: number }).status = 503;
+      reject(error);
+    }, ms);
+    promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (err) => {
+        clearTimeout(timer);
+        reject(err);
+      }
+    );
+  });
+}
+
+async function generateWithRetry(ai: GoogleGenAI, contents: Parameters<GoogleGenAI["models"]["generateContent"]>[0]["contents"], maxRetries = 1) {
   let lastError: unknown = null;
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
     try {
-      return await ai.models.generateContent({
-        model: "gemini-3.6-flash",
-        contents,
-        config: {
-          responseMimeType: "application/json",
-          temperature: 0.2,
-        },
-      });
+      return await withTimeout(
+        ai.models.generateContent({
+          model: "gemini-3.6-flash",
+          contents,
+          config: {
+            responseMimeType: "application/json",
+            temperature: 0.2,
+          },
+        }),
+        CALL_TIMEOUT_MS
+      );
     } catch (err) {
       lastError = err;
-      if (!isRetryableError(err)) {
-        throw err;
-      }
-      if (attempt === maxRetries) {
-        throw err;
-      }
-      const delay = getRetryDelay(attempt);
-      console.warn(
-        `Gemini geçici hata verdi. Retry ${
-          attempt + 1
-        }/${maxRetries}. ${delay}ms sonra tekrar denenecek.`
-      );
-      await new Promise((resolve) =>
-        setTimeout(resolve, delay)
-      );
+      if (!isRetryableError(err) || attempt === maxRetries) throw err;
+      const delay = getRetryDelay();
+      console.warn(`Gemini geçici hata. ${delay}ms sonra bir kez daha denenecek.`);
+      await new Promise((resolve) => setTimeout(resolve, delay));
     }
   }
   throw lastError;
@@ -187,11 +198,7 @@ export async function POST(request: NextRequest) {
         console.log(
           `Gemini API key #${keyIndex + 1}/${apiKeys.length} deneniyor...`
         );
-        const response = await generateWithRetry(
-          ai,
-          contents,
-          3
-        );
+        const response = await generateWithRetry(ai, contents, 1);
         rawText = response.text;
         lastError = null;
         console.log(
