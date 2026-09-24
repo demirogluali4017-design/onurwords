@@ -12,7 +12,7 @@ const EXTRACTION_PROMPT = `Bu görsel(ler)deki İngilizce kelimeleri çıkar. Bi
 2. "meaning" alanı: Eğer görselde kelimenin Türkçe anlamı zaten YAZILI olarak veriliyorsa (defter/kitap sayfasında karşısında yazan Türkçe kelime/ifade), onu BİREBİR, HİÇBİR ŞEKİLDE DEĞİŞTİRMEDEN, PARAFRAZ YAPMADAN, EŞ ANLAMLISINI KULLANMADAN aynen yaz — kendi yorumunu veya alternatif çevirini KATMA. Görselde yazılı bir anlam YOKSA (sadece kelimenin kendisi varsa) o zaman doğru ve yaygın Türkçe anlamını sen üret.
 3. "example_sentence" alanı: SADECE ve KESİNLİKLE İngilizce bir örnek cümle yaz. Türkçe veya başka bir dilde örnek cümle YAZMA. Görselde kelimeyle birlikte bir örnek cümle varsa onu birebir kullan; yoksa kelimeye uygun basit, doğru dilbilgisiyle yazılmış yeni bir İngilizce cümle üret.
 4. Aynı kelime birden fazla görselde tekrar geçiyorsa SADECE BİR KEZ ekle (tekrar eden kaydı çıkarma).
-5. "hint_word": Kelimeyi akılda tutan TEK Türkçe ipucu kelime. Anlamın kendisi olmasın. Sesi veya çağrışımı İngilizce kelimeye bağlansın. Cümle yazma.
+5. "hint_word": İngilizce kelimeyi akılda tutan kısa bir Türkçe kelime ya da öbek. Yazılışı veya sesi İngilizce kelimeye benzesin VE gerçek Türkçe anlamını da taşısın. Yalnızca harf benzerliği yetmez. Örnek: futile (faydasız) için "faydasız" yaz, "fay" yazma. Anlam bu iki şartı sağlıyorsa onu kullan. Uzun cümle yazma.
 6. "synonyms": Bu İngilizce kelimenin 3 yaygın eş anlamlısı. Dizi olarak yaz. Kelimenin kendisini tekrarlama.
 Yanıtı sadece ve strictly JSON array formatında döndür, başka hiçbir açıklama ekleme.
 Format:
@@ -272,7 +272,7 @@ export async function POST(request: NextRequest) {
         item.preposition?.trim() || null,
       meaning: item.meaning?.trim() ?? "",
       example_sentence: item.example_sentence?.trim() ?? "",
-      hint_word: normalizeHint(item.hint_word, item.meaning),
+      hint_word: normalizeHint(item.hint_word),
       synonyms: normalizeSynonyms(item.synonyms, item.word),
       repetitions: 0,
       interval: 1,

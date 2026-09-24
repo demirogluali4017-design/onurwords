@@ -6,13 +6,19 @@ export interface WordMemory {
 const EMPTY: WordMemory = { hint_word: null, synonyms: null };
 const MODELS = ["gemini-3.5-flash-lite", "gemini-3.8-flash"];
 
-export function normalizeHint(value: unknown, meaning = ""): string | null {
+const HINT_RULE = `hint_word: İngilizce kelimeyi akılda tutan kısa bir Türkçe kelime ya da öbek. İki şart birden gerekir:
+1) Yazılışı veya sesi İngilizce kelimeye benzesin.
+2) Kelimenin gerçek Türkçe anlamını da taşısın. Yalnızca harf benzerliği yetmez.
+Örnek: futile (anlamı faydasız) için ipucu "faydasız" olsun. "fay" yazma; o sadece yazılış benzer, anlamı taşımaz.
+Anlamın kendisi bu iki şartı sağlıyorsa onu yaz. Uzun cümle yazma.`;
+
+export function normalizeHint(value: unknown): string | null {
   const hint = String(value ?? "")
     .replace(/["“”]/g, "")
-    .split(/[.,;:|/]/)[0]
+    .split(/[.!?]/)[0]
+    .replace(/\s+/g, " ")
     .trim();
-  if (!hint || hint.length > 40) return null;
-  if (meaning && hint.toLocaleLowerCase("tr") === meaning.trim().toLocaleLowerCase("tr")) return null;
+  if (!hint || hint.length > 80) return null;
   return hint;
 }
 
@@ -91,7 +97,7 @@ function parseMemory(raw: string, word: string, meaning: string): WordMemory {
     .replace(/```\s*$/i, "");
   const parsed = JSON.parse(cleaned) as { hint_word?: unknown; synonyms?: unknown };
   return {
-    hint_word: normalizeHint(parsed.hint_word, meaning),
+    hint_word: normalizeHint(parsed.hint_word),
     synonyms: normalizeSynonyms(parsed.synonyms, word),
   };
 }
@@ -101,7 +107,7 @@ export async function suggestMemory(word: string, meaning: string): Promise<Word
 Türkçe anlam: ${meaning}
 Sadece JSON döndür:
 {"hint_word":"","synonyms":["","",""]}
-hint_word: anlamın kendisi olmayan, sesi veya çağrışımıyla bu İngilizce kelimeyi akılda tutan TEK Türkçe kelime.
+${HINT_RULE}
 synonyms: bu kelimenin 3 yaygın İngilizce eş anlamlısı. Kelimenin kendisini yazma.`;
   const raw = await geminiText(prompt);
   if (!raw) return EMPTY;
@@ -119,7 +125,7 @@ export async function suggestMemories(items: { word: string; meaning: string }[]
 ${lines}
 Sadece JSON array döndür. Sıra ve sayı aynı kalsın: ${items.length} kayıt.
 [{"hint_word":"","synonyms":["","",""]}]
-hint_word: anlamın kendisi OLMAYAN, sesi veya çağrışımıyla kelimeyi akılda tutan TEK Türkçe kelime.
+${HINT_RULE}
 synonyms: 3 yaygın İngilizce eş anlam. Kelimenin kendisini yazma.`;
   const raw = await geminiText(prompt);
   if (!raw) return items.map(() => EMPTY);
@@ -132,7 +138,7 @@ synonyms: 3 yaygın İngilizce eş anlam. Kelimenin kendisini yazma.`;
     const parsed = JSON.parse(cleaned) as { hint_word?: unknown; synonyms?: unknown }[];
     if (!Array.isArray(parsed)) return items.map(() => EMPTY);
     return items.map((item, index) => ({
-      hint_word: normalizeHint(parsed[index]?.hint_word, item.meaning),
+      hint_word: normalizeHint(parsed[index]?.hint_word),
       synonyms: normalizeSynonyms(parsed[index]?.synonyms, item.word),
     }));
   } catch {
