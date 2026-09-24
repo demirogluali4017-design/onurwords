@@ -1,5 +1,4 @@
 import { NextRequest, NextResponse } from "next/server";
-import { GoogleGenAI } from "@google/genai";
 import { createServiceRoleClient } from "@/lib/supabase";
 import { ExtractedWord } from "@/types";
 import { normalizeHint, normalizeSynonyms } from "@/lib/wordMemory";
@@ -65,56 +64,84 @@ function isRetryableError(err: unknown): boolean {
     message.includes("ABORTED")
   );
 }
-function getRetryDelay(): number {
-  return 800 + Math.floor(Math.random() * 400);
-}
 
-const CALL_TIMEOUT_MS = 20000;
+const MODELS = ["gemini-3.5-flash-lite", "gemini-3.8-flash"];
+const CALL_TIMEOUT_MS = 24000;
 
-function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
-  return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => {
-      const error = new Error("Gemini zaman aşımı");
-      (error as { status?: number }).status = 503;
-      reject(error);
-    }, ms);
-    promise.then(
-      (value) => {
-        clearTimeout(timer);
-        resolve(value);
-      },
-      (err) => {
-        clearTimeout(timer);
-        reject(err);
+async function callModel(
+  apiKey: string,
+  model: string,
+  contents: unknown,
+  withThinking: boolean
+): Promise<string> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), CALL_TIMEOUT_MS);
+  try {
+    const generationConfig: Record<string, unknown> = {
+      temperature: 0.2,
+      responseMimeType: "application/json",
+    };
+    if (withThinking) generationConfig.thinkingConfig = { thinkingLevel: "minimal" };
+
+    const res = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-goog-api-key": apiKey,
+        },
+        body: JSON.stringify({ contents, generationConfig }),
+        signal: controller.signal,
       }
     );
-  });
+    const data = (await res.json().catch(() => ({}))) as {
+      error?: { message?: string; status?: string };
+      candidates?: { content?: { parts?: { text?: string }[] } }[];
+    };
+    if (!res.ok) {
+      const error = new Error(data.error?.message || `Gemini ${res.status}`);
+      (error as { status?: number }).status = res.status;
+      throw error;
+    }
+    const text = (data.candidates?.[0]?.content?.parts ?? []).map((part) => part.text ?? "").join("");
+    if (!text.trim()) throw new Error("Gemini boş yanıt döndürdü.");
+    return text;
+  } catch (err) {
+    if (err instanceof Error && err.name === "AbortError") {
+      const timeout = new Error("Gemini zaman aşımı");
+      (timeout as { status?: number }).status = 503;
+      throw timeout;
+    }
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
-async function generateWithRetry(ai: GoogleGenAI, contents: Parameters<GoogleGenAI["models"]["generateContent"]>[0]["contents"], maxRetries = 1) {
+async function extractText(apiKeys: string[], contents: unknown): Promise<string> {
   let lastError: unknown = null;
-  for (let attempt = 0; attempt <= maxRetries; attempt++) {
-    try {
-      return await withTimeout(
-        ai.models.generateContent({
-          model: "gemini-3.6-flash",
-          contents,
-          config: {
-            responseMimeType: "application/json",
-            temperature: 0.2,
-          },
-        }),
-        CALL_TIMEOUT_MS
-      );
-    } catch (err) {
-      lastError = err;
-      if (!isRetryableError(err) || attempt === maxRetries) throw err;
-      const delay = getRetryDelay();
-      console.warn(`Gemini geçici hata. ${delay}ms sonra bir kez daha denenecek.`);
-      await new Promise((resolve) => setTimeout(resolve, delay));
+  for (const apiKey of apiKeys) {
+    for (const model of MODELS) {
+      try {
+        console.log(`Gemini ${model} deneniyor`);
+        return await callModel(apiKey, model, contents, true);
+      } catch (err) {
+        lastError = err;
+        const message = err instanceof Error ? err.message : "";
+        const status = (err as { status?: number }).status;
+        if (status === 400 && /thinking/i.test(message)) {
+          try {
+            return await callModel(apiKey, model, contents, false);
+          } catch (retryErr) {
+            lastError = retryErr;
+          }
+        }
+        console.warn(`Gemini ${model} olmadı:`, message || err);
+      }
     }
   }
-  throw lastError;
+  throw lastError ?? new Error("Gemini yanıt vermedi.");
 }
 export async function POST(request: NextRequest) {
   try {
@@ -188,52 +215,14 @@ export async function POST(request: NextRequest) {
     ];
     let rawText: string | undefined;
     let lastError: unknown = null;
-    let allRetryable = true;
-    for (
-      let keyIndex = 0;
-      keyIndex < apiKeys.length;
-      keyIndex++
-    ) {
-      const ai = new GoogleGenAI({
-        apiKey: apiKeys[keyIndex],
-      });
-      try {
-        console.log(
-          `Gemini API key #${keyIndex + 1}/${apiKeys.length} deneniyor...`
-        );
-        const response = await generateWithRetry(ai, contents, 1);
-        rawText = response.text;
-        lastError = null;
-        console.log(
-          `Gemini API key #${keyIndex + 1} başarılı.`
-        );
-        break;
-      } catch (err) {
-        lastError = err;
-        if (!isRetryableError(err)) {
-          allRetryable = false;
-          console.error(
-            `Gemini API key #${keyIndex + 1} geri döndürülemez hata verdi:`,
-            err
-          );
-          throw err;
-        }
-        const hasNextKey =
-          keyIndex < apiKeys.length - 1;
-        if (hasNextKey) {
-          console.warn(
-            `Gemini API key #${keyIndex + 1} başarısız oldu. Sıradaki key deneniyor.`
-          );
-          continue;
-        }
-        console.error(
-          "Tüm Gemini API key'leri başarısız oldu:",
-          err
-        );
-      }
+    try {
+      rawText = await extractText(apiKeys, contents);
+    } catch (err) {
+      lastError = err;
+      console.error("Gemini çıkarma başarısız:", err);
     }
     if (!rawText) {
-      if (allRetryable && lastError) {
+      if (lastError && isRetryableError(lastError)) {
         return NextResponse.json(
           {
             error:

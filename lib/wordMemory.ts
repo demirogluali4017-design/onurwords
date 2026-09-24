@@ -77,9 +77,13 @@ synonyms: bu kelimenin 3 yaygın İngilizce eş anlamlısı. Kelimenin kendisini
       const ai = new GoogleGenAI({ apiKey });
       const response = await withTimeout(
         ai.models.generateContent({
-          model: "gemini-3.6-flash",
+          model: "gemini-3.5-flash-lite",
           contents: prompt,
-          config: { responseMimeType: "application/json", temperature: 0.4 },
+          config: {
+            responseMimeType: "application/json",
+            temperature: 0.4,
+            thinkingConfig: { thinkingBudget: 0 },
+          },
         }),
         12000
       );

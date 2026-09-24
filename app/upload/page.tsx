@@ -72,7 +72,7 @@ async function sendPage(file: File, onStatus: (label: string) => void): Promise<
 
   for (let attempt = 0; attempt < 2; attempt++) {
     const controller = new AbortController();
-    const timer = window.setTimeout(() => controller.abort(), 28000);
+    const timer = window.setTimeout(() => controller.abort(), 58000);
     try {
       const formData = new FormData();
       formData.append("images", file);
