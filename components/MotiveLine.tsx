@@ -15,6 +15,8 @@ const LINES = [
   "Öğrenmek acele etmez. Bırakmayan ilerler.",
   "Her doğru cevap, bir kapıyı aralar.",
   "Dil, vazgeçmeyen insanın yanına oturur.",
+  "Bugün bilmediğin kelime yarın götünü tırmalar",
+  "We are the same pencil",
 ];
 
 export default function MotiveLine() {
